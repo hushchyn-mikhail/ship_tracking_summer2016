@@ -74,7 +74,7 @@ def params2vec(l, x0, m, y0):
     a = np.array([x2-x1, y2-y1, z2-z1])
     return a0, a
 
-def projector(event, x0s, ls, y0s, ms):
+def plot_artifitial_retina_response(event, x0s, ls, y0s, ms):
     """
     Take 4d-grid and return projections on 2 planes.
     """
