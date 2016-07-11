@@ -8,30 +8,31 @@ import theano.tensor as T
 from scipy.optimize import minimize_scalar
 
 
-#arr = np.array(x1, y1, z1, x2, y2, z2)
+#arr = np.array([x1, y1, z1, x2, y2, z2])
 def points2vec(arr):
     a0 = np.array([arr[0], arr[1], arr[2]])
     a = np.array([arr[3]-arr[0], arr[4]-arr[1], arr[5]-arr[2]])
-    return a0, a
+    return [a0, a]
 
-def params2vec(x0, l, y0, m):
+def params2vec(params):
     z1 = 0
     z2 = 1
-    x1 = x0
-    x2 = 1 * l + x0
-    y1 = y0
-    y2 = 1 * m + y0
+    x1 = params[0]
+    x2 = 1 * params[1] + params[0]
+    y1 = params[2]
+    y2 = 1 * params[3] + params[2]
     a0 = np.array([x1, y1, z1])
     a = np.array([x2-x1, y2-y1, z2-z1])
-    return a0, a
+    return [a0, a]
 
-def vec2params(a0, a):
-    
-    l = a[0] / a[2]
-    m = a[1] / a[2]
-    x0 = a0[0] - a[0] * a0[2] / a[2]
-    y0 = a0[1] - a[1] * a0[2] / a[2]
-    return x0, l, y0, m
+def vec2params(vec):
+    a0 = vec[0]
+    a = vec[1]
+    l = 1. * a[0] / a[2]
+    m = 1. *a[1] / a[2]
+    x0 = a0[0] - 1. * a[0] * a0[2] / a[2]
+    y0 = a0[1] - 1. * a[1] * a0[2] / a[2]
+    return [x0, l, y0, m]
 
 ######################################################################################################################################
 
@@ -91,19 +92,18 @@ R_func = theano.function([track0, track, points, directions, sig], r)
 derivative_r = T.grad(r, [track0, track])
 derivative_R = theano.function([track0, track, points, directions, sig], derivative_r)
 
-def artifitial_retina_response(l, x0, m, y0, coordinates, sigma):
+def artifitial_retina_response(params, coordinates, sigma):
     """
     Find retina response for a particular track and set of tubes.
     Input:
-        track_start - vector of any point of track;
-        track_direction - directing vector of track;
+        params - parameters of track;
         coordinates - matrix containing coordinates of ends of tubes, one row = ['Wx1', 'Wy1', 'Wz', 'Wx2', 'Wy2', 'Wz'];
         sigma - constant.
     Output:
         R - retina response for event.
     """
     
-    track_start, track_direction = params2vec(x0, l, y0, m)
+    track_start, track_direction = params2vec(params)
     
     tubes_starts = []
     tubes_directions = []
@@ -118,17 +118,23 @@ def artifitial_retina_response(l, x0, m, y0, coordinates, sigma):
 
 ######################################################################################################################################
 
-def plot_artifitial_retina_response(event, ms, y0s, ls, x0s, sigma):
+def plot_artifitial_retina_response(event, params_array, sigma):
     """
     Create projections on XZ and YZ.
     (x-x0)/l=(y-y0)/m=z (*)
     Input:
-        grid - 4d-grid with retina responses for different combinations of parameters of track;
-        x0s, ls, yos, ms - arrays with values of parameters from parametric equation(*) of line.
+        event - numpy table of event containig columns 'Wx1', 'Wy1', 'Wz', 'Wx2', 'Wy2';
+        params_array - arrays with values of parameters from parametric equation(*) of line, one row is [x0, l, y0, m];
+        sigma - parameter of artifitial_retina_response().
     Output:
         fig1 - projection of artifitial_retina_response on XZ;
         fig2 - projection of artifitial_retina_response on YZ.
     """
+
+    x0s = params_array[0]
+    ls = params_array[1]
+    y0s = params_array[2]
+    ms = params_array[3]
     
     coordinates = event[['Wx1', 'Wy1', 'Wz', 'Wx2', 'Wy2', 'Wz']].values
     
@@ -138,21 +144,21 @@ def plot_artifitial_retina_response(event, ms, y0s, ls, x0s, sigma):
         for j in range(len(ls)):
             for s in range(len(y0s)):
                 for t in range(len(ms)):
-                    grid[i, j, s, t] = artifitial_retina_response(ls[j], x0s[i], ms[t], y0s[s], coordinates, sigma)
+                    grid[i, j, s, t] = artifitial_retina_response([x0s[i], ls[j], y0s[s], ms[t]], coordinates, sigma)
     
     #initialization of projection matrixes
     projection_on_yz = np.zeros((grid.shape[3], grid.shape[2]), dtype="float64")
     projection_on_xz = np.zeros((grid.shape[1], grid.shape[0]), dtype="float64")
     
     #filling matrixes
-    for i in range(grid.shape[1]):
-        for j in range(grid.shape[0]):
-            projection_on_xz[i, j] = np.max(grid[j, i, :, :])
-            
     for s in range(grid.shape[3]):
         for t in range(grid.shape[2]):
             projection_on_yz[s, t] = np.max(grid[:, :, t, s])
     
+    for i in range(grid.shape[1]):
+        for j in range(grid.shape[0]):
+            projection_on_xz[i, j] = np.max(grid[j, i, :, :])
+            
     #creating of plt objects
     fig1 = plt.figure(figsize=(9, 7))
     plt.title("Projection on XZ", fontsize=20, fontweight='bold')
@@ -181,7 +187,7 @@ def get_track_params(event, trackID):
         event - pandas dataframe containing all hits of any event before/after magnet;
         trackID - id of track.
     Output:
-        x0, l, y0, m - parametres of track.
+        [x0, l, y0, m] - list of parametres of track.
     """
     track = event[event.TrackID==trackID]
     Xs = track.X.values
@@ -196,7 +202,7 @@ def get_track_params(event, trackID):
     y0 = y_params[1]
     m = y_params[0]
     
-    return x0, l, y0, m
+    return [x0, l, y0, m]
 
 ######################################################################################################################################
 
@@ -228,23 +234,24 @@ class RetinaTrackReconstruction(object):
         
         return self.minimize(a)
     
-    def gradient_descent(self, initial_dot, eps):
+    def gradient_descent(self, initial_dot):
         
         dots = [initial_dot]
-        values = [self.R(dots[-1])]
+        #values = [self.R(dots[-1])]
         dots.append(self.grad_step(dots[-1]))
-        values.append(self.R(dots[-1]))        
+        #values.append(self.R(dots[-1]))        
         
-        while np.linalg.norm(dots[-2]-dots[-1])>eps:
+        while (np.linalg.norm(dots[-2]-dots[-1])>self.eps) or (self.sigma>0.3):
             dots.append(self.grad_step(dots[-1]))
-            values.append(self.R(dots[-1]))  
+            #values.append(self.R(dots[-1]))
+            self.sigma = self.sigma * 0.9
             
         dots = np.array(dots)
-        values = np.array(values)
+        #values = np.array(values)
             
-        return dots, values
+        return dots[-1]
 
-    def fit(self, ends_of_strawtubes, ipar, s, eps=0.000005):
+    def fit(self, ends_of_strawtubes, initial_dots):
         
         A0 = []
         A = []
@@ -257,13 +264,21 @@ class RetinaTrackReconstruction(object):
         
         self.tubes_starts = np.array(A0)
         self.tubes_directions = np.array(A)
-        self.sigma = s
         
-        initial_track_start, initial_track_direction = params2vec(ipar[0], ipar[1], ipar[2], ipar[3])
-        start_dot = np.array([initial_track_start, initial_track_direction])
+        initial_sigma = 60
+        self.eps = 0.000005
         
-        dots, values = self.gradient_descent(start_dot, eps)
+        dots = []
+        
+        for idot in initial_dots:
+            
+            self.sigma = initial_sigma
+            
+            initial_track_start, initial_track_direction = params2vec(idot)
+            start_dot = np.array([initial_track_start, initial_track_direction])
 
-        return vec2params(dots[-1][0], dots[-1][1]), dots, values
+            dots.append(self.gradient_descent(start_dot))
+
+        return np.array(dots)
         #self.labels_ = labels
         #self.tracks_params_ = tracks_params
