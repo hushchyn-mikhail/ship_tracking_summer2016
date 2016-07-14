@@ -18,9 +18,9 @@ def params2vec(params):
     z1 = 0
     z2 = 1
     x1 = params[0]
-    x2 = 1 * params[1] + params[0]
+    x2 = 1. * params[1] + params[0]
     y1 = params[2]
-    y2 = 1 * params[3] + params[2]
+    y2 = 1. * params[3] + params[2]
     a0 = np.array([x1, y1, z1])
     a = np.array([x2-x1, y2-y1, z2-z1])
     return [a0, a]
@@ -194,11 +194,11 @@ def get_track_params(event, trackID):
     Ys = track.Y.values
     Zs = track.Z.values
     
-    x_params = np.polyfit(Zs[:2], Xs[:2], 1)
+    x_params = np.polyfit(Zs, Xs, 1)
     x0 = x_params[1]
     l = x_params[0]
 
-    y_params = np.polyfit(Zs[:2], Ys[:2], 1)
+    y_params = np.polyfit(Zs, Ys, 1)
     y0 = y_params[1]
     m = y_params[0]
     
@@ -237,14 +237,19 @@ class RetinaTrackReconstruction(object):
     def gradient_descent(self, initial_dot):
         
         dots = [initial_dot]
-        #values = [self.R(dots[-1])]
-        dots.append(self.grad_step(dots[-1]))
-        #values.append(self.R(dots[-1]))        
+        #values = [self.R(dots[-1])]   
         
-        while (np.linalg.norm(dots[-2]-dots[-1])>self.eps) or (self.sigma>0.3):
+        #while (np.linalg.norm(dots[-2]-dots[-1])>self.eps) or (self.sigma>0.3):
+        #    dots.append(self.grad_step(dots[-1]))
+        #    #values.append(self.R(dots[-1]))
+        #    self.sigma = self.sigma * 0.9
+        
+        while self.sigma>0.1:
             dots.append(self.grad_step(dots[-1]))
-            #values.append(self.R(dots[-1]))
-            self.sigma = self.sigma * 0.9
+            #values.append(self.R(dots[-1]))     
+            while np.linalg.norm(dots[-2]-dots[-1])>self.eps:
+                dots.append(self.grad_step(dots[-1]))
+            self.sigma = self.sigma * 0.8
             
         dots = np.array(dots)
         #values = np.array(values)
@@ -265,8 +270,8 @@ class RetinaTrackReconstruction(object):
         self.tubes_starts = np.array(A0)
         self.tubes_directions = np.array(A)
         
-        initial_sigma = 60
-        self.eps = 0.000005
+        initial_sigma = 50
+        self.eps = 0.000001
         
         dots = []
         
