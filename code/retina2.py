@@ -100,7 +100,7 @@ def get_track_params(event, trackID):
 
 ######################################################################################################################################
 
-def plot_artifitial_retina_response(event, params_array, sigma):
+def plot_artifitial_retina_response(event, params_array, sigma, log=False):
     """
     Create projections on XZ and YZ.
     (x-x0)/l=(y-y0)/m=z (*)
@@ -132,6 +132,10 @@ def plot_artifitial_retina_response(event, params_array, sigma):
     projection_on_yz = np.zeros((grid.shape[3], grid.shape[2]), dtype="float64")
     projection_on_xz = np.zeros((grid.shape[1], grid.shape[0]), dtype="float64")
     
+    if log == True:
+        projection_on_yz = np.log10(projection_on_yz)
+        projection_on_xz = np.log10(projection_on_xz)
+    
     #filling matrixes
     for s in range(grid.shape[3]):
         for t in range(grid.shape[2]):
@@ -144,16 +148,16 @@ def plot_artifitial_retina_response(event, params_array, sigma):
     #creating of plt objects
     fig1 = plt.figure(figsize=(9, 7))
     plt.title("Projection on XZ", fontsize=20, fontweight='bold')
-    #_ = plt.imshow(projection_on_xz, aspect='auto', cmap="Blues", extent=(ls.min(), ls.max(), x0s.max(), x0s.min()))
-    _ = plt.contourf(x0s, ls, projection_on_xz, cmap=plt.cm.Oranges)
+    _ = plt.imshow(projection_on_xz, aspect='auto', cmap=plt.cm.Oranges, extent=(ls.min(), ls.max(), x0s.max(), x0s.min()), interpolation='None')
+    #_ = plt.contourf(x0s, ls, projection_on_xz, cmap=plt.cm.Oranges)
     plt.xlabel("x0")
     plt.ylabel("l")
     plt.colorbar()
     
     fig2 = plt.figure(figsize=(9, 7))
     plt.title("Projection on YZ", fontsize=20, fontweight='bold')
-    #_ = plt.imshow(projection_on_yz, aspect='auto', cmap="Blues", extent=(ms.min(), ms.max(), y0s.max(), y0s.min()))
-    _ = plt.contourf(y0s, ms, projection_on_yz, cmap=plt.cm.Oranges)
+    _ = plt.imshow(projection_on_yz, aspect='auto', cmap=plt.cm.Oranges, extent=(ms.min(), ms.max(), y0s.max(), y0s.min()), interpolation='None')
+    #_ = plt.contourf(y0s, ms, projection_on_yz, cmap=plt.cm.Oranges)
     plt.xlabel("y0")
     plt.ylabel("m")
     plt.colorbar()
