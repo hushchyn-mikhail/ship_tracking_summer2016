@@ -264,14 +264,28 @@ class RetinaTrackReconstruction(object):
         
         dots = [initial_dot]
         
-        while self.sigma>0.001:
+        #while self.sigma>0.0005:
+        #    
+        #    dots.append(self.grad_step(dots[-1]))
+        #    
+        #    while np.linalg.norm(dots[-2]-dots[-1])>self.eps:
+        #        dots.append(self.grad_step(dots[-1]))
+        #    
+        #    self.sigma = self.sigma * 0.7
+        
+        while (self.sigma>0.0005) or (np.linalg.norm(dots[-2]-dots[-1])>self.eps):
             
             dots.append(self.grad_step(dots[-1]))
+            self.sigma = self.sigma * 0.7
             
-            while np.linalg.norm(dots[-2]-dots[-1])>self.eps:
-                dots.append(self.grad_step(dots[-1]))
+        self.sigma = 10
+        
+        while (self.sigma>0.0005) or (np.linalg.norm(dots[-2]-dots[-1])>self.eps):
             
-            self.sigma = self.sigma * 0.5
+            dots.append(self.grad_step(dots[-1]))
+            self.sigma = self.sigma * 0.7
+            
+        self.sigma = 10
             
         dots = np.array(dots)
             
@@ -297,8 +311,8 @@ class RetinaTrackReconstruction(object):
         self.tubes_directions = np.array(directions)
         self.tubes_z0s = np.array(z0s)
         
-        initial_sigma = 5
-        self.eps = 0.000005
+        initial_sigma = 10
+        self.eps = 0.0005
    
         dots = []
         
