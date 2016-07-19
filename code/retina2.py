@@ -17,7 +17,7 @@ tube_vec0 = T.vector("tube_vec0", dtype='float64')
 tube_vec1 = T.vector("tube_vec1", dtype='float64')
 
 point_in_z = T.dot(matrix_conv, param_vec)
-z_dist = T.sqrt(T.sum(-T.sum((tube_vec0-point_in_z)*tube_vec1)*tube_vec1+(tube_vec0-point_in_z))**2)
+z_dist = T.sqrt(T.sum((-T.sum((tube_vec0-point_in_z)*tube_vec1)*tube_vec1+(tube_vec0-point_in_z))**2))
 z_distance_theano = theano.function([param_vec, matrix_conv, tube_vec0, tube_vec1], z_dist)
 z_distance_theano_grad = theano.function([param_vec, matrix_conv, tube_vec0, tube_vec1], T.grad(z_dist, param_vec))
 
