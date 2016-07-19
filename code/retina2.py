@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import theano
 import theano.tensor as T
 from scipy.optimize import minimize_scalar
-from sklearn.preprocessing import MinMaxScaler
+#from sklearn.preprocessing import MinMaxScaler
 
 
 ######################################################################################################################################
@@ -168,70 +168,58 @@ def plot_artifitial_retina_response(event, params_array, sigma, log=False):
 
 class Scaler():
     
-    def __init__(self):
+    def __init__(self, z_scale=1., y_scale=1., x_scale=1.):
         
-        self.x_range = [-1, 1]
-        self.y_range = [-1, 1]
-        self.z_range = [0, 2]
-        
-        self.x_scaler = MinMaxScaler(self.x_range)
-        self.y_scaler = MinMaxScaler(self.y_range)
-        self.z_scaler = MinMaxScaler(self.z_range)
-        
-        self.x_range_ext = [-250, 250]
-        self.y_range_ext = [-500, 500]
-        self.z_range_ext = [0, 3500]
-        
-        self.x_scaler.fit(self.x_range_ext)
-        self.y_scaler.fit(self.y_range_ext)
-        self.z_scaler.fit(self.z_range_ext)
-        
-        self.x_coeff = 1. * (self.x_range_ext[1] - self.x_range_ext[0]) / (self.x_range[1] - self.x_range[0])
-        self.y_coeff = 1. * (self.y_range_ext[1] - self.y_range_ext[0]) / (self.y_range[1] - self.y_range[0])
-        self.z_coeff = 1. * (self.z_range_ext[1] - self.z_range_ext[0]) / (self.z_range[1] - self.z_range[0])
+        self.z_scale = z_scale
+        self.y_scale = y_scale
+        self.x_scale = x_scale
         
     def transform(self, coordinates):
         
         new_coordinates = np.copy(coordinates)
-        new_coordinates[:, 0] = self.x_scaler.transform(coordinates[:, 0])
-        new_coordinates[:, 3] = self.x_scaler.transform(coordinates[:, 3])
-        new_coordinates[:, 1] = self.y_scaler.transform(coordinates[:, 1])
-        new_coordinates[:, 4] = self.y_scaler.transform(coordinates[:, 4])
-        new_coordinates[:, 2] = self.z_scaler.transform(coordinates[:, 2])
-        new_coordinates[:, 5] = self.z_scaler.transform(coordinates[:, 5])
+        new_coordinates[:, 0] = coordinates[:, 0] / self.x_scale
+        new_coordinates[:, 3] = coordinates[:, 3] / self.x_scale
+        new_coordinates[:, 1] = coordinates[:, 1] / self.y_scale
+        new_coordinates[:, 4] = coordinates[:, 4] / self.y_scale
+        new_coordinates[:, 2] = coordinates[:, 2] / self.z_scale
+        new_coordinates[:, 5] = coordinates[:, 5] / self.z_scale
         
         return new_coordinates
     
     def inverse_transform(self, coordinates):
         
         new_coordinates = np.copy(coordinates)
-        new_coordinates[:, 0] = self.x_scaler.inverse_transform(coordinates[:, 0])
-        new_coordinates[:, 3] = self.x_scaler.inverse_transform(coordinates[:, 3])
-        new_coordinates[:, 1] = self.y_scaler.inverse_transform(coordinates[:, 1])
-        new_coordinates[:, 4] = self.y_scaler.inverse_transform(coordinates[:, 4])
-        new_coordinates[:, 2] = self.z_scaler.inverse_transform(coordinates[:, 2])
-        new_coordinates[:, 5] = self.z_scaler.inverse_transform(coordinates[:, 5])
+        new_coordinates[:, 0] = coordinates[:, 0] * self.x_scale
+        new_coordinates[:, 3] = coordinates[:, 3] * self.x_scale
+        new_coordinates[:, 1] = coordinates[:, 1] * self.y_scale
+        new_coordinates[:, 4] = coordinates[:, 4] * self.y_scale
+        new_coordinates[:, 2] = coordinates[:, 2] * self.z_scale
+        new_coordinates[:, 5] = coordinates[:, 5] * self.z_scale
         
         return new_coordinates
     
     def parameters_inverse_transform(self, new_params):
 
-        return new_params * np.array([self.x_coeff, self.x_coeff / self.z_coeff, self.y_coeff, self.y_coeff / self.z_coeff]).T
+        return new_params * np.array([self.x_scale, self.x_scale / self.z_scale, self.y_scale, self.y_scale / self.z_scale]).T
     
     def parameters_transform(self, params):
 
-        return params * np.array([1. / self.x_coeff, self.z_coeff / self.x_coeff, 1. / self.y_coeff, self.z_coeff / self.y_coeff]).T
+        return params * np.array([1. / self.x_scale, self.z_scale / self.x_scale, 1. / self.y_scale, self.z_scale / self.y_scale]).T
         
 ######################################################################################################################################
 
 class RetinaTrackReconstruction(object):
     
-    def __init__(self):
+    def __init__(self, z_scale=1500., eps=1., sigma_from=50., sigma_to=1.):
 
         self.labels_ = None
         self.tracks_params_ = None
+        self.z_scale = z_scale
+        self.eps = eps
+        self.sigma_from = sigma_from
+        self.sigma_to = sigma_to
         
-    def grad_R(self, a):
+    def grad_R(self, a, sigma):
         
         grad_R = 0
     
@@ -239,54 +227,46 @@ class RetinaTrackReconstruction(object):
 
             rho = z_distance(a, self.tubes_z0s[i], self.tubes_starts[i], self.tubes_directions[i])
             grad_rho = z_distance_grad(a, self.tubes_z0s[i], self.tubes_starts[i], self.tubes_directions[i])
-            grad_R += np.exp(-rho**2/self.sigma**2)*rho*grad_rho
+            grad_R += np.exp(-rho**2/sigma**2)*rho*grad_rho
 
-        grad_R = -1./self.sigma**2 * grad_R
+        grad_R = -1./sigma**2 * grad_R
         
         return -grad_R
     
-    def R(self, a):
+    def R(self, a, sigma):
         
         R = 0
     
         for i in range(len(self.tubes_z0s)):
 
-            R += np.exp(-z_distance(a, self.tubes_z0s[i], self.tubes_starts[i], self.tubes_directions[i])**2/self.sigma**2)
+            R += np.exp(-z_distance(a, self.tubes_z0s[i], self.tubes_starts[i], self.tubes_directions[i])**2/sigma**2)
         
         return -R
     
-    def minimize(self, a):
+    def minimize(self, a, sigma):
     
-        l_min = minimize_scalar(lambda l: self.R(a - l * self.grad_R(a))).x
-        return a - l_min * self.grad_R(a)
+        l_min = minimize_scalar(lambda l: self.R(a - l * self.grad_R(a, sigma), sigma)).x
+        return a - l_min * self.grad_R(a, sigma)
     
-    def grad_step(self, a):
+    def grad_step(self, a, sigma):
         
-        return self.minimize(a)
+        return self.minimize(a, sigma)
     
     def gradient_descent(self, initial_dot):
         
-        dots = [initial_dot]
-            
-        dots.append(self.grad_step(dots[-1]))
-
-        #while np.linalg.norm(dots[-2]-dots[-1])>self.eps:
-        #    dots.append(self.grad_step(dots[-1]))
+        sigma = self.sigma_from
         
+        dots = [initial_dot]
+        dots.append(self.grad_step(dots[-1], sigma))
+        
+        while (sigma>self.sigma_to):
+            
+            sigma = sigma * 0.99
+            dots.append(self.grad_step(dots[-1], sigma))
+            
         while (np.linalg.norm(dots[-2]-dots[-1])>self.eps):
             
-            dots.append(self.grad_step(dots[-1]))
-            if self.sigma>0.0005:
-                self.sigma = self.sigma * 0.99
-            
-        #self.sigma = 10
-        #
-        #while (self.sigma>0.0005) or (np.linalg.norm(dots[-2]-dots[-1])>self.eps):
-        #    
-        #    dots.append(self.grad_step(dots[-1]))
-        #    self.sigma = self.sigma * 0.7
-        #    
-        #self.sigma = 10
+            dots.append(self.grad_step(dots[-1], sigma))
             
         dots = np.array(dots)
             
@@ -294,7 +274,7 @@ class RetinaTrackReconstruction(object):
 
     def fit(self, ends_of_strawtubes, initial_dots):
         
-        scaler = Scaler()
+        scaler = Scaler(z_scale=self.z_scale)
         normed_ends = scaler.transform(ends_of_strawtubes)
         
         starts = []
@@ -311,15 +291,11 @@ class RetinaTrackReconstruction(object):
         self.tubes_starts = np.array(starts)
         self.tubes_directions = np.array(directions)
         self.tubes_z0s = np.array(z0s)
-        
-        initial_sigma = 0.5
-        self.eps = 0.000005
    
         dots = []
         
         for idot in initial_dots:
             
-            self.sigma = initial_sigma
             idot = scaler.parameters_transform(idot)
 
             dots.append(scaler.parameters_inverse_transform(self.gradient_descent(idot)))
