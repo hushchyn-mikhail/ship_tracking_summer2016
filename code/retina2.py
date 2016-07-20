@@ -6,7 +6,6 @@ import matplotlib.pyplot as plt
 import theano
 import theano.tensor as T
 from scipy.optimize import minimize_scalar
-#from sklearn.preprocessing import MinMaxScaler
 
 
 ######################################################################################################################################
@@ -95,7 +94,7 @@ def artificial_retina_response(track_params, ends_of_strawtubes, sigma):
 
 ######################################################################################################################################
 
-def artifitial_retina_response_grad(track_params, ends_of_strawtubes, sigma):
+def artificial_retina_response_grad(track_params, ends_of_strawtubes, sigma):
     
     grad_R = 0
     
@@ -138,7 +137,7 @@ def get_track_params(event, trackID):
 
 ######################################################################################################################################
 
-def plot_artifitial_retina_response(event, params_array, sigma, log=False):
+def plot_artificial_retina_response(event, params_array, sigma, log=False):
     """
     Create projections on XZ and YZ.
     (x-x0)/l=(y-y0)/m=z (*)
@@ -243,7 +242,21 @@ class Scaler():
     def parameters_transform(self, params):
 
         return params * np.array([1. / self.x_scale, self.z_scale / self.x_scale, 1. / self.y_scale, self.z_scale / self.y_scale]).T
+    
+######################################################################################################################################
+
+def distances(track_params, tubes_starts, tubes_directions, tubes_zs):
+    
+    distances = []
+    
+    for i in range(len(tubes_zs)):
         
+        distances.append(z_distance_theano(track_params, np.array([[1, tubes_zs[i], 0, 0],[0, 0, 1, tubes_zs[i]]]), tubes_starts[i], tubes_directions[i]))
+            
+    distances = np.array(distances)
+        
+    return distances
+    
 ######################################################################################################################################
 
 class RetinaTrackReconstruction(object):
@@ -257,58 +270,43 @@ class RetinaTrackReconstruction(object):
         self.sigma_from = sigma_from
         self.sigma_to = sigma_to
         
-    def grad_R(self, a, sigma):
+    def grad_R(self, a, tubes_starts, tubes_directions, sigma, matrixes):
         
-        #grad_R = 0
-        #
-        #for i in range(len(self.tubes_z0s)):
-        #
-        #    rho = z_distance(a, self.tubes_z0s[i], self.tubes_starts[i], self.tubes_directions[i])
-        #    grad_rho = z_distance_grad(a, self.tubes_z0s[i], self.tubes_starts[i], self.tubes_directions[i])
-        #    grad_R += np.exp(-rho**2/sigma**2)*rho*grad_rho
-        #
-        #grad_R = -1./sigma**2 * grad_R
-        #
-        #return -grad_R
+        return -derivative_R(a, tubes_starts, tubes_directions, sigma, matrixes)
+    
+    def R(self, a, tubes_starts, tubes_directions, sigma, matrixes):
         
-        return -derivative_R(a, self.tubes_starts, self.tubes_directions, sigma, self.matrixes)
+        return -R_func(a, tubes_starts, tubes_directions, sigma, matrixes)
     
-    def R(self, a, sigma):
+    def minimize(self, a, tubes_starts, tubes_directions, sigma, matrixes):
+    
+        l_min = minimize_scalar(lambda l: self.R(a - l * self.grad_R(a, tubes_starts, tubes_directions, sigma, matrixes), \
+                                                tubes_starts, tubes_directions, sigma, matrixes)).x
+        return a - l_min * self.grad_R(a, tubes_starts, tubes_directions, sigma, matrixes)
+    
+    def grad_step(self, a, tubes_starts, tubes_directions, sigma, matrixes):
         
-        #R = 0
-        #
-        #for i in range(len(self.tubes_z0s)):
-        #
-        #    R += np.exp(-z_distance(a, self.tubes_z0s[i], self.tubes_starts[i], self.tubes_directions[i])**2/sigma**2)
-        #
-        #return -R
-        
-        return -R_func(a, self.tubes_starts, self.tubes_directions, sigma, self.matrixes)
+        return self.minimize(a, tubes_starts, tubes_directions, sigma, matrixes)
     
-    def minimize(self, a, sigma):
-    
-        l_min = minimize_scalar(lambda l: self.R(a - l * self.grad_R(a, sigma), sigma)).x
-        return a - l_min * self.grad_R(a, sigma)
-    
-    def grad_step(self, a, sigma):
-        
-        return self.minimize(a, sigma)
-    
-    def gradient_descent(self, initial_dot):
+    def gradient_descent(self, initial_dot, tubes_starts, tubes_directions, matrixes):
         
         sigma = self.sigma_from
         
         dots = [initial_dot]
-        dots.append(self.grad_step(dots[-1], sigma))
+        dots.append(self.grad_step(dots[-1], tubes_starts, tubes_directions, sigma, matrixes))
+        
+        while (np.linalg.norm(dots[-2]-dots[-1])>1):
+            
+            dots.append(self.grad_step(dots[-1], tubes_starts, tubes_directions, sigma, matrixes))
         
         while (sigma>self.sigma_to):
             
-            sigma = sigma * 0.97
-            dots.append(self.grad_step(dots[-1], sigma))
+            sigma = sigma * 0.995
+            dots.append(self.grad_step(dots[-1], tubes_starts, tubes_directions, sigma, matrixes))
             
         while (np.linalg.norm(dots[-2]-dots[-1])>self.eps):
             
-            dots.append(self.grad_step(dots[-1], sigma))
+            dots.append(self.grad_step(dots[-1], tubes_starts, tubes_directions, sigma, matrixes))
             
         dots = np.array(dots)
             
@@ -332,10 +330,10 @@ class RetinaTrackReconstruction(object):
             z0s.append(z0)
             matrixes.append(np.array([[1,z0,0,0],[0,0,1,z0]]))
         
-        self.tubes_starts = np.array(starts)
-        self.tubes_directions = np.array(directions)
-        self.tubes_z0s = np.array(z0s)
-        self.matrixes = np.array(matrixes)
+        tubes_starts = np.array(starts)
+        tubes_directions = np.array(directions)
+        tubes_z0s = np.array(z0s)
+        matrixes = np.array(matrixes)
    
         dots = []
         
@@ -343,6 +341,58 @@ class RetinaTrackReconstruction(object):
             
             idot = scaler.parameters_transform(idot)
 
-            dots.append(scaler.parameters_inverse_transform(self.gradient_descent(idot)))
+            dots.append(scaler.parameters_inverse_transform(self.gradient_descent(idot, tubes_starts, tubes_directions,\
+                                                                                  matrixes)))
+        
+        return dots
+        """
+        values = []
+        
+        for dot in dots:
+            
+            values.append(self.R(dot[-1], tubes_starts, tubes_directions, self.sigma_to, matrixes))
+        
+        i_min = np.argmin(values)
+        track1 = dots[i_min][-1]
+        distances1 = distances(track1, tubes_starts, tubes_directions, tubes_z0s)
+        mask = distances1 > 2.
+        
+        self.distances1 = distances1
+        
+        dots = []
+        
+        if len(tubes_starts[mask])>1:
+        
+            for idot in initial_dots:
 
-        return np.array(dots)
+                idot = scaler.parameters_transform(idot)
+
+                dots.append(scaler.parameters_inverse_transform(self.gradient_descent(idot, tubes_starts[mask],\
+                                                                                      tubes_directions[mask], matrixes[mask])))
+
+            values = []
+
+            for dot in dots:
+
+                values.append(self.R(dot[-1], tubes_starts, tubes_directions, self.sigma_to, matrixes))
+
+            i_min = np.argmin(values)
+            track2 = dots[i_min][-1]
+            distances2 = distances(track2, tubes_starts, tubes_directions, tubes_z0s)
+
+            labels = np.array([-1] * len(distances1))
+            label_treshold = 2.
+
+            for i in range(len(distances1)):
+
+                if distances1[i] < np.min([distances2[i], label_treshold]):
+
+                    labels[i] = 0
+
+                elif distances2[i] < np.min([distances1[i], label_treshold]):
+
+                    labels[i] = 1
+
+            self.labels_ = labels
+            self.tracks_params_ = np.array([track1, track2])
+            """
