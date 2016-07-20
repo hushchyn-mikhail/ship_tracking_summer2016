@@ -35,6 +35,44 @@ def z_distance_grad(param_vec, z, tube_vec0, tube_vec1):
 
 ######################################################################################################################################
 
+param_vect = T.vector("param_vect", dtype='float64')
+matrix_convert = T.tensor3("matrix_convert", dtype='float64')
+tube_vec0s = T.matrix("tube_vec0s", dtype='float64')
+tube_vec1s = T.matrix("tube_vec1s", dtype='float64')
+sig = T.scalar("sig", dtype="float64")
+
+rs, updates = theano.scan(fn = lambda tube0, tube1, matrix, param_v, s:
+                          T.exp(-T.sqrt(T.sum((-T.dot(tube0-T.dot(matrix, param_v), tube1)*tube1+(tube0-T.dot(matrix, param_v)))**2))**2/s**2),
+                          sequences=[tube_vec0s, tube_vec1s, matrix_convert],
+                          non_sequences=[param_vect, sig])
+    
+r = rs.sum()
+R_func = theano.function([param_vect, tube_vec0s, tube_vec1s, sig, matrix_convert], r)
+
+derivative_r = T.grad(r, param_vect)
+derivative_R = theano.function([param_vect, tube_vec0s, tube_vec1s, sig, matrix_convert], derivative_r)
+
+def artificial_retina_response2(track_params, ends_of_strawtubes, sigma):
+    
+    starts = []
+    directions = []
+    matrixes = []
+    
+    for i in range(len(ends_of_strawtubes)):
+        
+        start, direction, z0 = ends2params(ends_of_strawtubes[i])
+        starts.append(start)
+        directions.append(direction)
+        matrixes.append(np.array([[1,z0,0,0],[0,0,1,z0]]))
+    
+    starts = np.array(starts)
+    directions = np.array(directions)
+    matrixes = np.array(matrixes)
+    
+    return R_func(track_params, starts, directions, sigma, matrixes)
+
+######################################################################################################################################
+
 def ends2params(array):
     
     start = array[:2]
@@ -44,7 +82,7 @@ def ends2params(array):
     
     return start, direction, z0
 
-def artifitial_retina_response(track_params, ends_of_strawtubes, sigma):
+def artificial_retina_response(track_params, ends_of_strawtubes, sigma):
     
     R = 0
     
@@ -221,27 +259,31 @@ class RetinaTrackReconstruction(object):
         
     def grad_R(self, a, sigma):
         
-        grad_R = 0
-    
-        for i in range(len(self.tubes_z0s)):
-
-            rho = z_distance(a, self.tubes_z0s[i], self.tubes_starts[i], self.tubes_directions[i])
-            grad_rho = z_distance_grad(a, self.tubes_z0s[i], self.tubes_starts[i], self.tubes_directions[i])
-            grad_R += np.exp(-rho**2/sigma**2)*rho*grad_rho
-
-        grad_R = -1./sigma**2 * grad_R
+        #grad_R = 0
+        #
+        #for i in range(len(self.tubes_z0s)):
+        #
+        #    rho = z_distance(a, self.tubes_z0s[i], self.tubes_starts[i], self.tubes_directions[i])
+        #    grad_rho = z_distance_grad(a, self.tubes_z0s[i], self.tubes_starts[i], self.tubes_directions[i])
+        #    grad_R += np.exp(-rho**2/sigma**2)*rho*grad_rho
+        #
+        #grad_R = -1./sigma**2 * grad_R
+        #
+        #return -grad_R
         
-        return -grad_R
+        return -derivative_R(a, self.tubes_starts, self.tubes_directions, sigma, self.matrixes)
     
     def R(self, a, sigma):
         
-        R = 0
-    
-        for i in range(len(self.tubes_z0s)):
-
-            R += np.exp(-z_distance(a, self.tubes_z0s[i], self.tubes_starts[i], self.tubes_directions[i])**2/sigma**2)
+        #R = 0
+        #
+        #for i in range(len(self.tubes_z0s)):
+        #
+        #    R += np.exp(-z_distance(a, self.tubes_z0s[i], self.tubes_starts[i], self.tubes_directions[i])**2/sigma**2)
+        #
+        #return -R
         
-        return -R
+        return -R_func(a, self.tubes_starts, self.tubes_directions, sigma, self.matrixes)
     
     def minimize(self, a, sigma):
     
@@ -261,7 +303,7 @@ class RetinaTrackReconstruction(object):
         
         while (sigma>self.sigma_to):
             
-            sigma = sigma * 0.99
+            sigma = sigma * 0.97
             dots.append(self.grad_step(dots[-1], sigma))
             
         while (np.linalg.norm(dots[-2]-dots[-1])>self.eps):
@@ -280,6 +322,7 @@ class RetinaTrackReconstruction(object):
         starts = []
         directions = []
         z0s = []
+        matrixes = []
         
         for i in range(len(normed_ends)):
             
@@ -287,10 +330,12 @@ class RetinaTrackReconstruction(object):
             starts.append(start)
             directions.append(direction)
             z0s.append(z0)
+            matrixes.append(np.array([[1,z0,0,0],[0,0,1,z0]]))
         
         self.tubes_starts = np.array(starts)
         self.tubes_directions = np.array(directions)
         self.tubes_z0s = np.array(z0s)
+        self.matrixes = np.array(matrixes)
    
         dots = []
         
