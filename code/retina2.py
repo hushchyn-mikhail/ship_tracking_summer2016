@@ -281,12 +281,18 @@ class RetinaTrackReconstruction(object):
     def minimize(self, a, tubes_starts, tubes_directions, sigma, matrixes):
     
         l_min = minimize_scalar(lambda l: self.R(a - l * self.grad_R(a, tubes_starts, tubes_directions, sigma, matrixes), \
-                                                tubes_starts, tubes_directions, sigma, matrixes)).x
+                                                tubes_starts, tubes_directions, sigma, matrixes), tol=0.1, method='brent').x
         return a - l_min * self.grad_R(a, tubes_starts, tubes_directions, sigma, matrixes)
     
     def grad_step(self, a, tubes_starts, tubes_directions, sigma, matrixes):
         
         return self.minimize(a, tubes_starts, tubes_directions, sigma, matrixes)
+    
+    def step_on_direction(self, a, direction, tubes_starts, tubes_directions, sigma, matrixes):
+        
+        l_min = minimize_scalar(lambda l: self.R(a - l * direction, tubes_starts, tubes_directions, sigma, matrixes), tol=0.1, method='brent').x
+                                
+        return a - l_min * direction
     
     def gradient_descent(self, initial_dot, tubes_starts, tubes_directions, matrixes):
         
@@ -295,21 +301,60 @@ class RetinaTrackReconstruction(object):
         dots = [initial_dot]
         dots.append(self.grad_step(dots[-1], tubes_starts, tubes_directions, sigma, matrixes))
         
-        while (np.linalg.norm(dots[-2]-dots[-1])>1):
-            
-            dots.append(self.grad_step(dots[-1], tubes_starts, tubes_directions, sigma, matrixes))
+        #while (np.linalg.norm(dots[-2]-dots[-1])>0.1):
+        #    
+        #    dots.append(self.grad_step(dots[-1], tubes_starts, tubes_directions, sigma, matrixes))
+        #    dots.append(self.grad_step(dots[-1], tubes_starts, tubes_directions, sigma, matrixes))
+        #    dots.append(self.step_on_direction(dots[-1], dots[-1]-dots[-3], tubes_starts, tubes_directions, sigma, matrixes))
         
         while (sigma>self.sigma_to):
             
-            sigma = sigma * 0.995
+            sigma = sigma * 0.99
             dots.append(self.grad_step(dots[-1], tubes_starts, tubes_directions, sigma, matrixes))
-            
-        while (np.linalg.norm(dots[-2]-dots[-1])>self.eps):
-            
             dots.append(self.grad_step(dots[-1], tubes_starts, tubes_directions, sigma, matrixes))
+            dots.append(self.step_on_direction(dots[-1], dots[-1]-dots[-3], tubes_starts, tubes_directions, sigma, matrixes))
             
+        #while (np.linalg.norm(dots[-2]-dots[-1])>self.eps):
+        #    
+        #    dots.append(self.grad_step(dots[-1], tubes_starts, tubes_directions, sigma, matrixes))
+        #    
         dots = np.array(dots)
             
+        return dots
+    
+    def conjugate_gradient_method(self, initial_dot, tubes_starts, tubes_directions, matrixes):
+        
+        sigma = self.sigma_from
+        dots = [initial_dot]
+        
+        direction = self.grad_R(dots[-1], tubes_starts, tubes_directions, sigma, matrixes)
+        dots.append(self.step_on_direction(dots[-1], direction, tubes_starts, tubes_directions, sigma, matrixes))
+        counter = 1
+        r = [0, direction]
+        last_direction = direction
+        
+        while sigma>self.sigma_to:
+            
+            sigma *= 0.99
+            
+            while counter < 4:
+                
+                r[0] = r[1]
+                r[1] = self.grad_R(dots[-1], tubes_starts, tubes_directions, sigma, matrixes)
+                beta = np.dot(r[1], r[1]) / np.dot(r[0], r[0])
+                direction = r[1] + beta * last_direction
+                dots.append(self.step_on_direction(dots[-1], direction, tubes_starts, tubes_directions, sigma, matrixes))
+                last_direction = direction
+                
+                counter += 1
+            
+            
+            direction = self.grad_R(dots[-1], tubes_starts, tubes_directions, sigma, matrixes)
+            r[1] = direction
+            dots.append(self.step_on_direction(dots[-1], direction, tubes_starts, tubes_directions, sigma, matrixes))
+            last_direction = direction
+            counter = 1
+        
         return dots
 
     def fit(self, ends_of_strawtubes, initial_dots):
@@ -341,7 +386,7 @@ class RetinaTrackReconstruction(object):
             
             idot = scaler.parameters_transform(idot)
 
-            dots.append(scaler.parameters_inverse_transform(self.gradient_descent(idot, tubes_starts, tubes_directions,\
+            dots.append(scaler.parameters_inverse_transform(self.conjugate_gradient_method(idot, tubes_starts, tubes_directions,\
                                                                                   matrixes)))
         
         return dots
@@ -354,8 +399,8 @@ class RetinaTrackReconstruction(object):
         
         i_min = np.argmin(values)
         track1 = dots[i_min][-1]
-        distances1 = distances(track1, tubes_starts, tubes_directions, tubes_z0s)
-        mask = distances1 > 2.
+        distances1 = distances(scaler.parameters_transform(track1), tubes_starts, tubes_directions, tubes_z0s)
+        mask = distances1 > 1.
         
         self.distances1 = distances1
         
@@ -378,7 +423,7 @@ class RetinaTrackReconstruction(object):
 
             i_min = np.argmin(values)
             track2 = dots[i_min][-1]
-            distances2 = distances(track2, tubes_starts, tubes_directions, tubes_z0s)
+            distances2 = distances(scaler.parameters_transform(track2), tubes_starts, tubes_directions, tubes_z0s)
 
             labels = np.array([-1] * len(distances1))
             label_treshold = 2.
@@ -394,5 +439,4 @@ class RetinaTrackReconstruction(object):
                     labels[i] = 1
 
             self.labels_ = labels
-            self.tracks_params_ = np.array([track1, track2])
-            """
+            self.tracks_params_ = np.array([track1, track2])"""
