@@ -333,73 +333,66 @@ class RetinaTrackReconstruction(object):
                 
                 r[0] = r[1]
                 r[1] = self.grad_R(dots[-1], tubes_starts, tubes_directions, sigma, matrixes)
-                beta = np.dot(r[1], r[1]) / np.dot(r[0], r[0])
+                beta = np.dot(r[1], r[1]-r[0]) / np.dot(r[0], r[0])
                 direction = r[1] + beta * last_direction
                 dots.append(self.step_on_direction(dots[-1], direction, tubes_starts, tubes_directions, sigma, matrixes))
                 last_direction = direction
                 
                 counter += 1
             
-            
-            direction = self.grad_R(dots[-1], tubes_starts, tubes_directions, sigma, matrixes)
-            r[1] = direction
+            r[0] = r[1]
+            r[1] = self.grad_R(dots[-1], tubes_starts, tubes_directions, sigma, matrixes)
+            beta = np.max(beta, 0)
+            direction = r[1] + beta * last_direction
             dots.append(self.step_on_direction(dots[-1], direction, tubes_starts, tubes_directions, sigma, matrixes))
             last_direction = direction
             counter = 1
         
         return dots
     
-    def find_2_max(initial_dots, tubes_starts, tubes_directions, matrixes):
+    def cgm(self, initial_dot, tubes_starts, tubes_directions, matrixes):
+
+        dots = [initial_dot]
         
-        dots = []
-        values = []
+        m = np.array([[1, 1.67,0,0], [1, 1.93, 0,0], [0,0,1,1.67], [0,0,1,1.93]])
         
-        for idot in initial_dots:
+        sigma = self.sigma_from
+        
+        while sigma > self.sigma_to:
             
-            idot = scaler.parameters_transform(idot)
-
-            dots.append(scaler.parameters_inverse_transform(self.conjugate_gradient_method(idot, tubes_starts, tubes_directions,\
-                                                                                  matrixes)))
-            values.append(self.R(dot[-1], tubes_starts, tubes_directions, self.sigma_to, matrixes))
-                   
-        i_min = np.argmin(values)
-        track1 = dots[i_min][-1]
-        distances1 = distances(scaler.parameters_transform(track1), tubes_starts, tubes_directions, tubes_z0s)
-        mask = distances1 > 1.
-        
-        labels = np.array([-1] * len(distances1))
-        label_treshold = 2.
-        
-        if len(tubes_starts[mask])>1:
+            r = [0, 0]
+            r[1] = self.grad_R(dots[-1], tubes_starts, tubes_directions, sigma, matrixes)
+            beta = 0
+            direction = r[1]
+            dots.append(self.step_on_direction(dots[-1], direction, tubes_starts, tubes_directions, sigma, matrixes))
+            last_direction = direction
+            counter = 1
             
-            dots = []
-            values = []
-        
-            for idot in initial_dots:
-
-                idot = scaler.parameters_transform(idot)
-
-                dots.append(scaler.parameters_inverse_transform(self.gradient_descent(idot, tubes_starts[mask],\
-                                                                                      tubes_directions[mask], matrixes[mask])))
-                values.append(self.R(dot[-1], tubes_starts, tubes_directions, self.sigma_to, matrixes))
-
-
-            i_min = np.argmin(values)
-            track2 = dots[i_min][-1]
-            distances2 = distances(scaler.parameters_transform(track2), tubes_starts, tubes_directions, tubes_z0s)
-
-            for i in range(len(distances1)):
-
-                if distances1[i] < np.min([distances2[i], label_treshold]):
-
-                    labels[i] = 0
-
-                elif distances2[i] < np.min([distances1[i], label_treshold]):
-
-                    labels[i] = 1
-                    
-        return labels
+            while np.linalg.norm(dots[-1]-dots[-2])>0.00001/self.sigma_to*sigma:
             
+                while counter < 4:
+
+                    r[0] = r[1]
+                    r[1] = self.grad_R(dots[-1], tubes_starts, tubes_directions, sigma, matrixes)
+                    beta = np.dot(r[1], r[1]-r[0]) / np.dot(r[0], r[0])
+                    direction = r[1] + beta * last_direction
+                    dots.append(self.step_on_direction(dots[-1], direction, tubes_starts, tubes_directions, sigma, matrixes))
+                    last_direction = direction
+
+                    counter += 1
+
+                r[0] = r[1]
+                r[1] = self.grad_R(dots[-1], tubes_starts, tubes_directions, sigma, matrixes)
+                beta = np.max(beta, 0)
+                direction = r[1] + beta * last_direction
+                dots.append(self.step_on_direction(dots[-1], direction, tubes_starts, tubes_directions, sigma, matrixes))
+                last_direction = direction
+                counter = 1
+                
+            sigma *= 0.6
+                
+        return dots
+         
     def fit(self, ends_of_strawtubes, initial_dots):
         
         scaler = Scaler(z_scale=self.z_scale, y_scale=self.y_scale, x_scale=self.x_scale)
@@ -429,8 +422,7 @@ class RetinaTrackReconstruction(object):
             
             idot = scaler.parameters_transform(idot)
 
-            dots.append(scaler.parameters_inverse_transform(self.conjugate_gradient_method(idot, tubes_starts, tubes_directions,\
-                                                                                  matrixes)))
+            dots.append(scaler.parameters_inverse_transform(self.cgm(idot, tubes_starts, tubes_directions, matrixes)))
         
         #return dots
         
@@ -447,37 +439,34 @@ class RetinaTrackReconstruction(object):
         
         labels = np.array([-1] * len(distances1))
         label_treshold = 2.
-        
-        if len(tubes_starts[mask])>1:
             
-            dots = []
-        
-            for idot in initial_dots:
+        dots = []
 
-                idot = scaler.parameters_transform(idot)
+        for idot in initial_dots:
 
-                dots.append(scaler.parameters_inverse_transform(self.gradient_descent(idot, tubes_starts[mask],\
-                                                                                      tubes_directions[mask], matrixes[mask])))
+            idot = scaler.parameters_transform(idot)
 
-            values = []
+            dots.append(scaler.parameters_inverse_transform(self.cgm(idot, tubes_starts[mask], tubes_directions[mask],\
+                                                                     matrixes[mask])))
 
-            for dot in dots:
+        values = []
 
-                values.append(self.R(dot[-1], tubes_starts, tubes_directions, self.sigma_to, matrixes))
+        for dot in dots:
 
-            i_min = np.argmin(values)
-            track2 = dots[i_min][-1]
-            distances2 = distances(scaler.parameters_transform(track2), tubes_starts, tubes_directions, tubes_z0s)
+            values.append(self.R(dot[-1], tubes_starts, tubes_directions, self.sigma_to, matrixes))
 
-            for i in range(len(distances1)):
+        i_min = np.argmin(values)
+        track2 = dots[i_min][-1]
+        distances2 = distances(scaler.parameters_transform(track2), tubes_starts, tubes_directions, tubes_z0s)
 
-                if distances1[i] < np.min([distances2[i], label_treshold]):
+        for i in range(len(distances1)):
 
-                    labels[i] = 0
+            if distances1[i] < np.min([distances2[i], label_treshold]):
 
-                elif distances2[i] < np.min([distances1[i], label_treshold]):
+                labels[i] = 0
 
-                    labels[i] = 1
+            elif distances2[i] < np.min([distances1[i], label_treshold]):
 
+                labels[i] = 1
         self.labels_ = labels
         self.tracks_params_ = np.array([[[track1[3], track1[2]], [track1[1], track1[0]]], [[track2[3], track2[2]],[track2[1], track2[0]]]])
