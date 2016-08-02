@@ -435,7 +435,7 @@ class RetinaTrackReconstruction(object):
         i_min = np.argmin(values)
         track1 = dots[i_min][-1]
         distances1 = distances(scaler.parameters_transform(track1), tubes_starts, tubes_directions, tubes_z0s)
-        mask = distances1 > 1.
+        mask = distances1 > 0.8
         
         labels = np.array([-1] * len(distances1))
         label_treshold = 2.
@@ -469,4 +469,5 @@ class RetinaTrackReconstruction(object):
 
                 labels[i] = 1
         self.labels_ = labels
-        self.tracks_params_ = np.array([[[track1[3], track1[2]], [track1[1], track1[0]]], [[track2[3], track2[2]],[track2[1], track2[0]]]])
+        #self.tracks_params_ = np.array([[[track1[3], track1[2]], [track1[1], track1[0]]], [[track2[3], track2[2]],[track2[1], track2[0]]]])
+        self.tracks_params_ = np.array([track1, track2])
