@@ -51,7 +51,7 @@ R_func = theano.function([param_vect, tube_vec0s, tube_vec1s, sig, matrix_conver
 derivative_r = T.grad(r, param_vect)
 derivative_R = theano.function([param_vect, tube_vec0s, tube_vec1s, sig, matrix_convert], derivative_r)
 
-def artificial_retina_response2(track_params, ends_of_strawtubes, sigma):
+def artificial_retina_response(track_params, ends_of_strawtubes, sigma):
     
     starts = []
     directions = []
@@ -81,33 +81,26 @@ def ends2params(array):
     
     return start, direction, z0
 
-def artificial_retina_response(track_params, ends_of_strawtubes, sigma):
-    
-    R = 0
-    
-    for i in range(len(ends_of_strawtubes)):
-        
-        start, direction, z0 = ends2params(ends_of_strawtubes[i])
-        R += np.exp(-z_distance(track_params, z0, start, direction)**2/sigma**2)
-        
-    return R
-
 ######################################################################################################################################
 
 def artificial_retina_response_grad(track_params, ends_of_strawtubes, sigma):
     
-    grad_R = 0
+    starts = []
+    directions = []
+    matrixes = []
     
     for i in range(len(ends_of_strawtubes)):
-    
+        
         start, direction, z0 = ends2params(ends_of_strawtubes[i])
-        rho = z_distance(track_params, z0, start, direction)
-        grad_rho = z_distance_grad(track_params, z0, start, direction)
-        grad_R += np.exp(-rho**2/sigma**2)*rho*grad_rho
+        starts.append(start)
+        directions.append(direction)
+        matrixes.append(np.array([[1,z0,0,0],[0,0,1,z0]]))
     
-    grad_R = -1./sigma**2 * grad_R
+    starts = np.array(starts)
+    directions = np.array(directions)
+    matrixes = np.array(matrixes)
     
-    return grad_R
+    return derivative_R(track_params, starts, directions, sigma, matrixes)
 
 ######################################################################################################################################
 
@@ -280,85 +273,20 @@ class RetinaTrackReconstruction(object):
         
         return -R_func(a, tubes_starts, tubes_directions, sigma, matrixes)
     
-    def minimize(self, a, tubes_starts, tubes_directions, sigma, matrixes):
-    
-        l_min = minimize_scalar(lambda l: self.R(a - l * self.grad_R(a, tubes_starts, tubes_directions, sigma, matrixes), \
-                                                tubes_starts, tubes_directions, sigma, matrixes), tol=0.1, method='brent').x
-        return a - l_min * self.grad_R(a, tubes_starts, tubes_directions, sigma, matrixes)
-    
-    def grad_step(self, a, tubes_starts, tubes_directions, sigma, matrixes):
-        
-        return self.minimize(a, tubes_starts, tubes_directions, sigma, matrixes)
-    
     def step_on_direction(self, a, direction, tubes_starts, tubes_directions, sigma, matrixes):
         
-        l_min = minimize_scalar(lambda l: self.R(a - l * direction, tubes_starts, tubes_directions, sigma, matrixes), tol=0.1, method='brent').x
+        l_min = minimize_scalar(lambda l: self.R(a - l * direction, tubes_starts, tubes_directions, sigma, matrixes), tol=0.1,\
+                                method='brent').x
                                 
         return a - l_min * direction
     
-    def gradient_descent(self, initial_dot, tubes_starts, tubes_directions, matrixes):
-        
-        sigma = self.sigma_from
-        
-        dots = [initial_dot]
-        dots.append(self.grad_step(dots[-1], tubes_starts, tubes_directions, sigma, matrixes))
-
-        while (sigma>self.sigma_to):
-            
-            sigma = sigma * 0.97
-            dots.append(self.grad_step(dots[-1], tubes_starts, tubes_directions, sigma, matrixes))
-            dots.append(self.grad_step(dots[-1], tubes_starts, tubes_directions, sigma, matrixes))
-            dots.append(self.step_on_direction(dots[-1], dots[-1]-dots[-3], tubes_starts, tubes_directions, sigma, matrixes))
-            
-        dots = np.array(dots)
-            
-        return dots
-    
     def conjugate_gradient_method(self, initial_dot, tubes_starts, tubes_directions, matrixes):
-        
-        sigma = self.sigma_from
-        dots = [initial_dot]
-        
-        direction = self.grad_R(dots[-1], tubes_starts, tubes_directions, sigma, matrixes)
-        dots.append(self.step_on_direction(dots[-1], direction, tubes_starts, tubes_directions, sigma, matrixes))
-        counter = 1
-        r = [0, direction]
-        last_direction = direction
-        
-        while sigma>self.sigma_to:
-            
-            sigma *= 0.99
-            
-            while counter < 4:
-                
-                r[0] = r[1]
-                r[1] = self.grad_R(dots[-1], tubes_starts, tubes_directions, sigma, matrixes)
-                beta = np.dot(r[1], r[1]-r[0]) / np.dot(r[0], r[0])
-                direction = r[1] + beta * last_direction
-                dots.append(self.step_on_direction(dots[-1], direction, tubes_starts, tubes_directions, sigma, matrixes))
-                last_direction = direction
-                
-                counter += 1
-            
-            r[0] = r[1]
-            r[1] = self.grad_R(dots[-1], tubes_starts, tubes_directions, sigma, matrixes)
-            beta = np.max(beta, 0)
-            direction = r[1] + beta * last_direction
-            dots.append(self.step_on_direction(dots[-1], direction, tubes_starts, tubes_directions, sigma, matrixes))
-            last_direction = direction
-            counter = 1
-        
-        return dots
-    
-    def cgm(self, initial_dot, tubes_starts, tubes_directions, matrixes):
 
         dots = [initial_dot]
         
-        m = np.array([[1, 1.67,0,0], [1, 1.93, 0,0], [0,0,1,1.67], [0,0,1,1.93]])
-        
         sigma = self.sigma_from
         
-        while sigma > self.sigma_to:
+        while sigma >= self.sigma_to:
             
             r = [0, 0]
             r[1] = self.grad_R(dots[-1], tubes_starts, tubes_directions, sigma, matrixes)
@@ -392,8 +320,86 @@ class RetinaTrackReconstruction(object):
             sigma *= 0.6
                 
         return dots
+    
+    def initial_dots_generator(self, ends):
+        
+        #constants
+        delta = 15
+        
+        xs = []
+        ys = []
+        zs = []
+        
+        for i in range(len(ends)-1):
+            
+            for j in range(i+1, len(ends)):
+                
+                one = ends[i]
+                two = ends[j]
+                
+                if np.abs(one[2]-two[2])<delta and (one[1]-two[1])*(one[4]-two[4])<0:
+                    
+                    y1 = one[1]
+                    y2 = one[4]
+
+                    x1 = one[0]
+                    x2 = one[3]
+
+                    z12 = one[2]
+
+                    k12 = (y2 - y1) / (x2 - x1)
+                    b12 = y1 - k12 * x1
+
+
+                    y3 = two[1]
+                    y4 = two[4]
+
+                    x3 = two[0]
+                    x4 = two[3]
+
+                    z34 = two[2]
+
+                    k34 = (y4 - y3) / (x4 - x3)
+                    b34 = y3 - k34 * x3
+
+                    x = (b12 - b34) / (k34 - k12)
+                    y = k12 * x + b12
+                    z = 0.5 * (z12 + z34)
+
+                    if np.abs(x) <= 300:
+
+                        xs.append(x)
+                        ys.append(y)
+                        zs.append(z)
+                        
+        init_dots = []
+                        
+        for i in range(len(zs)):
+            
+            for j in range(i+1, len(zs)):
+                
+                if zs[i] - zs[j] > delta:
+                    
+                    x1 = xs[i]
+                    x2 = xs[j]
+
+                    y1 = ys[i]
+                    y2 = ys[j]
+
+                    z1 = zs[i]
+                    z2 = zs[j]
+
+                    k_y = (y2 - y1) / (z2 - z1)
+                    b_y = y1 - k_y * z1
+
+                    k_stereo = (x2 - x1) / (z2 - z1)
+                    b_stereo = x1 - k_stereo * z1
+                
+                    init_dots.append([b_stereo, k_stereo, b_y, k_y])
+        
+        return np.array(init_dots)
          
-    def fit(self, ends_of_strawtubes, initial_dots):
+    def fit(self, ends_of_strawtubes):
         
         scaler = Scaler(z_scale=self.z_scale, y_scale=self.y_scale, x_scale=self.x_scale)
         normed_ends = scaler.transform(ends_of_strawtubes)
@@ -415,49 +421,51 @@ class RetinaTrackReconstruction(object):
         tubes_directions = np.array(directions)
         tubes_z0s = np.array(z0s)
         matrixes = np.array(matrixes)
+        
+        initial_dots = self.initial_dots_generator(ends_of_strawtubes)
    
-        dots = []
+        min_R = 0
+        best_dot = np.array([0,0,0,0])
         
         for idot in initial_dots:
             
-            idot = scaler.parameters_transform(idot)
+            idot_tr = scaler.parameters_transform(idot)
 
-            dots.append(scaler.parameters_inverse_transform(self.cgm(idot, tubes_starts, tubes_directions, matrixes)))
-        
-        #return dots
-        
-        values = []
-        
-        for dot in dots:
+            new_R = self.R(idot_tr, tubes_starts, tubes_directions, self.sigma_to, matrixes)
             
-            values.append(self.R(dot[-1], tubes_starts, tubes_directions, self.sigma_to, matrixes))
+            if new_R < min_R:
+                
+                min_R = new_R
+                best_dot = idot_tr
         
-        i_min = np.argmin(values)
-        track1 = dots[i_min][-1]
-        distances1 = distances(scaler.parameters_transform(track1), tubes_starts, tubes_directions, tubes_z0s)
+        #return scaler.parameters_inverse_transform(self.conjugate_gradient_method(best_dot, tubes_starts,\
+        #                                                                          tubes_directions, matrixes))
+        
+        track1 = self.conjugate_gradient_method(best_dot, tubes_starts, tubes_directions, matrixes)[-1]
+        distances1 = distances(track1, tubes_starts, tubes_directions, tubes_z0s)
         mask = distances1 > 0.8
         
         labels = np.array([-1] * len(distances1))
         label_treshold = 2.
             
-        dots = []
-
+        initial_dots = self.initial_dots_generator(ends_of_strawtubes[mask])
+        
+        min_R = 0
+        best_dot = np.array([0,0,0,0])
+        
         for idot in initial_dots:
+            
+            idot_tr = scaler.parameters_transform(idot)
 
-            idot = scaler.parameters_transform(idot)
-
-            dots.append(scaler.parameters_inverse_transform(self.cgm(idot, tubes_starts[mask], tubes_directions[mask],\
-                                                                     matrixes[mask])))
-
-        values = []
-
-        for dot in dots:
-
-            values.append(self.R(dot[-1], tubes_starts, tubes_directions, self.sigma_to, matrixes))
-
-        i_min = np.argmin(values)
-        track2 = dots[i_min][-1]
-        distances2 = distances(scaler.parameters_transform(track2), tubes_starts, tubes_directions, tubes_z0s)
+            new_R = self.R(idot_tr, tubes_starts, tubes_directions, self.sigma_to, matrixes)
+            
+            if new_R < min_R:
+                
+                min_R = new_R
+                best_dot = idot_tr
+                
+        track2 = self.conjugate_gradient_method(best_dot, tubes_starts, tubes_directions, matrixes)[-1]
+        distances2 = distances(track2, tubes_starts, tubes_directions, tubes_z0s)
 
         for i in range(len(distances1)):
 
@@ -468,6 +476,11 @@ class RetinaTrackReconstruction(object):
             elif distances2[i] < np.min([distances1[i], label_treshold]):
 
                 labels[i] = 1
+                
         self.labels_ = labels
-        #self.tracks_params_ = np.array([[[track1[3], track1[2]], [track1[1], track1[0]]], [[track2[3], track2[2]],[track2[1], track2[0]]]])
-        self.tracks_params_ = np.array([track1, track2])
+        
+        track1 = scaler.parameters_inverse_transform(track1)
+        track2 = scaler.parameters_inverse_transform(track2)
+        
+        self.tracks_params_ = np.array([[[track1[3], track1[2]], [track1[1], track1[0]]], [[track2[3], track2[2]],[track2[1], track2[0]]]])
+        #self.tracks_params_ = np.array([track1, track2])
