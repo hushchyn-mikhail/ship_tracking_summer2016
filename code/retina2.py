@@ -217,12 +217,24 @@ def plot_artificial_retina_response(event, params_array, sigma, log=False):
 class Scaler():
     
     def __init__(self, z_scale=1., y_scale=1., x_scale=1.):
+        """
+        This class implements linear transformation of space.
+        :z_scale: coefficiet of compression along z-axis.
+        :y_scale: coefficiet of compression along y-axis.
+        :x_scale: coefficiet of compression along x-axis.
+        :return:
+        """
         
         self.z_scale = z_scale
         self.y_scale = y_scale
         self.x_scale = x_scale
         
     def transform(self, coordinates):
+        """
+        Transfroms numpy-matrix of coordinates according to compression coefficiets.
+        :coordinates: numpy-matrix columns of that are [Wx1, Wy1, Wz, Wx2, Wy2, Wz].
+        :return: transformed coordinates in the same format.
+        """
         
         new_coordinates = np.copy(coordinates)
         new_coordinates[:, 0] = coordinates[:, 0] / self.x_scale
@@ -235,6 +247,11 @@ class Scaler():
         return new_coordinates
     
     def inverse_transform(self, coordinates):
+        """
+        This method implements inverse transformation.
+        :coordinates: numpy-matrix columns of that are [Wx1, Wy1, Wz, Wx2, Wy2, Wz].
+        :return: transformed coordinates in the same format.
+        """
         
         new_coordinates = np.copy(coordinates)
         new_coordinates[:, 0] = coordinates[:, 0] * self.x_scale
@@ -247,10 +264,20 @@ class Scaler():
         return new_coordinates
     
     def parameters_inverse_transform(self, new_params):
+        """
+        This method implements inverse transformation of parameters.
+        :new_params: 4-vector array([x0, l, y0, m]) of parameters in transformed space.
+        :return: 4-vector of parameters in original space.
+        """
 
         return new_params * np.array([self.x_scale, self.x_scale / self.z_scale, self.y_scale, self.y_scale / self.z_scale]).T
     
     def parameters_transform(self, params):
+        """
+        This method implements transformation of parameters from original space to new.
+        :params: 4-vector array([x0, l, y0, m]) of parameters in original space.
+        :return: 4-vector of parameters in transformed space.
+        """
 
         return params * np.array([1. / self.x_scale, self.z_scale / self.x_scale, 1. / self.y_scale, self.z_scale / self.y_scale]).T
     
@@ -274,6 +301,19 @@ class RetinaTrackReconstruction(object):
     
     def __init__(self, z_scale=1500., sigma_from=0.8, sigma_to=0.8, y_scale=1., x_scale=1., stopping_criteria=0.00001, \
                 sigma_decrement=0.5, noise_treshold=2., inlier_treshold=0.8, pre_sigma=0.8):
+        """
+        This class recognizes 2 tracks before/after magnet.
+        :z_scale: coefficient of compression of original space(X,Y,Z) along z_axis.
+        :y_scale: coefficient of compression of original space(X,Y,Z) along y_axis.
+        :x_scale: coefficient of compression of original space(X,Y,Z) along x_axis.
+        :sigma_from: starting value of sigma in process of optimization.
+        :sigma_to: finishing value of sigma in process of optimization.
+        :sigma_decrement: speed of decreasing.
+        :pre_sigma: value of sigma for selection of initial tracks.
+        :noise_treshold: treshold to label hit as noise.
+        :inlier_treshold: treshold to label hit as inlier.
+        :return:
+        """
 
         self.labels_ = None
         self.tracks_params_ = None
@@ -303,6 +343,15 @@ class RetinaTrackReconstruction(object):
         return a - l_min * direction
     
     def conjugate_gradient_method(self, initial_dot, tubes_starts, tubes_directions, matrixes, dists):
+        """
+        This method implements process of optimization.
+        :initial_dot: starting dot for optimization.
+        :tubes_starts: array of any points of tubes.
+        :tubes_directions: array of directing vectors of tubes.
+        :matrixes: matrixes containing z-coordinate.
+        :dists: array of dist2Wire.
+        :return: optimal dot.
+        """
 
         dots = [initial_dot]
         
@@ -344,6 +393,11 @@ class RetinaTrackReconstruction(object):
         return dots
     
     def initial_dots_generator(self, ends):
+        """
+        This method generates initial tracks.
+        :ends: numpy-matrix of coordinates of hits [Wx1, Wy1, Wz, Wx2, Wy2, Wz].
+        :return:
+        """
         
         #constants
         delta = 15
@@ -409,6 +463,12 @@ class RetinaTrackReconstruction(object):
         return np.array(init_dots)
          
     def fit(self, ends_of_strawtubes, dists):
+        """
+        This method recognizes tracks and labels hits.
+        :ends_of_straw_tubes: numpy-matrix of coordinates of hits [Wx1, Wy1, Wz, Wx2, Wy2, Wz].
+        :dists: dist2Wire array.
+        :return:
+        """
         
         scaler = Scaler(z_scale=self.z_scale, y_scale=self.y_scale, x_scale=self.x_scale)
         normed_ends = scaler.transform(ends_of_strawtubes)
@@ -467,15 +527,14 @@ class RetinaTrackReconstruction(object):
             
                 idot_tr = scaler.parameters_transform(idot)
 
-                new_R = self.R(idot_tr, tubes_starts[mask], tubes_directions[mask], self.pre_sigma, matrixes[mask], dists[mask])
+                new_R = self.R(idot_tr, tubes_starts, tubes_directions, self.pre_sigma, matrixes, dists)
 
                 if (new_R <= min_R):
 
                     min_R = new_R
                     best_dot = idot_tr
                     
-            track2 = self.conjugate_gradient_method(best_dot, tubes_starts[mask], tubes_directions[mask], matrixes[mask],\
-                                                    dists[mask])[-1]
+            track2 = self.conjugate_gradient_method(best_dot, tubes_starts, tubes_directions, matrixes, dists)[-1]
         
         else:
             
