@@ -5,7 +5,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import theano
 import theano.tensor as T
-from scipy.optimize import minimize_scalar
+from scipy.optimize import minimize_scalar, basinhopping, differential_evolution
 from skimage.draw import line_aa
 
 
@@ -159,6 +159,24 @@ def artificial_retina_response_grad(params, y, ends_of_strawtubes_b, dists_b, en
 
 ######################################################################################################################################
 
+def adjR(params, *data):
+    
+    x0, m, y0, l_b, l_a = params
+    
+    starts_b, perpendiculars_b, zs_b, starts_a, perpendiculars_a, zs_a, sigma, z_magnet = data
+    
+    dists_b = np.sum((np.hstack([(x0 + (zs_b - z_magnet) * m).reshape(-1, 1), (y0 + (zs_b - z_magnet) * l_b).reshape(-1, 1)]) -\
+                      starts_b) * perpendiculars_b, axis=1)
+    
+    dists_a = np.sum((np.hstack([(x0 + (zs_a - z_magnet) * m).reshape(-1, 1), (y0 + (zs_a - z_magnet) * l_a).reshape(-1, 1)]) -\
+                      starts_a) * perpendiculars_a, axis=1)
+    
+    dists = np.vstack([dists_a.reshape(-1, 1), dists_b.reshape(-1, 1)]).reshape(-1)
+    
+    return -np.sum(np.exp((-dists**2)/sigma**2))
+
+######################################################################################################################################
+
 def get_track_params(event, trackID, z_magnet=3070.):
     """
     Returns x0, l, y0, m parameters of track.
@@ -266,41 +284,33 @@ class Scaler():
     
 ######################################################################################################################################
 
-def projection_on_magnet(ends_of_strawtubes, dists, x_resolution=1., y_resolution=1., z_magnet=3070.):
+def projection_on_magnet(ends_of_strawtubes, x_resolution=1., y_resolution=1., z_magnet=3070.):
     
     tubes = []
+    
     for i in range(len(ends_of_strawtubes)):
+        
         tubes.append(ends2params(ends_of_strawtubes[i]))
 
     lines = []
     z3 = z_magnet
     for i in range(len(tubes)):
+        
         for j in range(i+1, len(tubes)):
+        
             t1 = tubes[i]
             t2 = tubes[j]
-            d1 = dists[i]
-            d2 = dists[j]
-            shift1 = np.array([0, d1])
-            shift2 = np.array([0, d2])
+            
             if (t1[2] != t2[2]) and (np.sum(t1[1] - t2[1]) < 0.01):
+                
                 start1 = t1[0]
                 start2 = t2[0]
                 z1 = t1[2]
                 z2 = t2[2]
-                start3 = ((start2 + shift2) - (start1 + shift1)) / (z2 - z1) * (z3 - z2) + start2
+                start3 = (start2 - start1) / (z2 - z1) * (z3 - z2) + start2
+                
                 if (start3[1] > -500) and (start3[1] < 500) and (start3[0] < -225) and (start3[0] > -275):
-                    lines.append([start3, t1[1]])
-
-                start3 = ((start2 - shift2) - (start1 + shift1)) / (z2 - z1) * (z3 - z2) + start2
-                if (start3[1] > -500) and (start3[1] < 500) and (start3[0] < -225) and (start3[0] > -275):
-                    lines.append([start3, t1[1]])
-
-                start3 = ((start2 + shift2) - (start1 - shift1)) / (z2 - z1) * (z3 - z2) + start2
-                if (start3[1] > -500) and (start3[1] < 500) and (start3[0] < -225) and (start3[0] > -275):
-                    lines.append([start3, t1[1]])
-
-                start3 = ((start2 - shift2) - (start1 - shift1)) / (z2 - z1) * (z3 - z2) + start2
-                if (start3[1] > -500) and (start3[1] < 500) and (start3[0] < -225) and (start3[0] > -275):
+                
                     lines.append([start3, t1[1]])
     
     x_len = int(600 * x_resolution)
@@ -308,10 +318,12 @@ def projection_on_magnet(ends_of_strawtubes, dists, x_resolution=1., y_resolutio
     line_len = 500
 
     matrix = np.zeros([x_len, y_len])
+    
     for line in lines:
-        rr, cc, val = line_aa(int(line[0][0] * x_resolution) + x_len / 2, int(line[0][1] * y_resolution) + y_len / 2,\
-                              int((line[0][0] + line[1][0] * line_len) * x_resolution) + x_len / 2,\
-                              int((line[0][1] + line[1][1] * line_len) * y_resolution) + y_len / 2)
+        
+        rr, cc, val = line_aa(int(round(line[0][0] * x_resolution)) + x_len / 2, int(round(line[0][1] * y_resolution)) + y_len / 2,\
+                              int(round((line[0][0] + line[1][0] * line_len) * x_resolution)) + x_len / 2,\
+                              int(round((line[0][1] + line[1][1] * line_len) * y_resolution)) + y_len / 2)
         matrix[rr, cc] += 1
         
     return matrix
@@ -320,9 +332,9 @@ def projection_on_magnet(ends_of_strawtubes, dists, x_resolution=1., y_resolutio
 
 class RetinaTrackReconstruction(object):
     
-    def __init__(self, z_scale=1500., sigma_from=0.8, sigma_to=0.8, y_scale=1., x_scale=1., stopping_criteria=0.00001,\
+    def __init__(self, z_scale=1500., sigma_from=200, sigma_to=0.8, y_scale=1., x_scale=1., stopping_criteria=0.00001,\
                  z_magnet=3070., sigma_decrement=0.5, noise_treshold=2., inlier_treshold=0.8, pre_sigma=0.8, x_resolution=1.,\
-                 y_resolution=1.):
+                 y_resolution=1., adjusting=True):
         """
         This class recognizes 2 tracks before/after magnet.
         :z_scale: coefficient of compression of original space(X,Y,Z) along z_axis.
@@ -352,6 +364,7 @@ class RetinaTrackReconstruction(object):
         self.x_resolution = x_resolution
         self.y_resolution = y_resolution
         self.z_magnet = z_magnet
+        self.adjusting = adjusting
         
     def grad_R(self, params, y0, tubes_starts_b, tubes_directions_b, tubes_zs_b, dists_b, tubes_starts_a,\
                tubes_directions_a, tubes_zs_a, dists_a, sigma):
@@ -380,7 +393,7 @@ class RetinaTrackReconstruction(object):
         return params - l_min * direction
     
     def conjugate_gradient_method(self, params, y0, tubes_starts_b, tubes_directions_b, tubes_zs_b, dists_b, tubes_starts_a,\
-                                  tubes_directions_a, tubes_zs_a, dists_a):
+                                  tubes_directions_a, tubes_zs_a, dists_a, sigma_from):
         """
         This method implements process of optimization.
         :initial_dot: starting dot for optimization.
@@ -393,10 +406,7 @@ class RetinaTrackReconstruction(object):
 
         dots = [params]
         
-        sigma = self.sigma_from
-        #####################
-        values = [self.R(dots[-1], y0, tubes_starts_b, tubes_directions_b, tubes_zs_b, dists_b, tubes_starts_a,\
-                              tubes_directions_a, tubes_zs_a, dists_a, sigma)]
+        sigma = sigma_from
         
         while sigma >= self.sigma_to:
             
@@ -407,13 +417,11 @@ class RetinaTrackReconstruction(object):
             direction = r[1]
             dots.append(self.step_on_direction(dots[-1], direction, y0, tubes_starts_b, tubes_directions_b, tubes_zs_b,\
                                                dists_b, tubes_starts_a, tubes_directions_a, tubes_zs_a, dists_a, sigma))
-            ##################
-            values.append(self.R(dots[-1], y0, tubes_starts_b, tubes_directions_b, tubes_zs_b, dists_b, tubes_starts_a,\
-                              tubes_directions_a, tubes_zs_a, dists_a, sigma))
+
             last_direction = direction
             counter = 1
             
-            while np.linalg.norm(dots[-1]-dots[-2])>self.stopping_criteria/self.sigma_to*sigma:
+            while np.linalg.norm(dots[-1]-dots[-2]) > self.stopping_criteria / self.sigma_to * sigma:
             
                 while counter < 4:
 
@@ -424,9 +432,7 @@ class RetinaTrackReconstruction(object):
                     direction = r[1] + beta * last_direction
                     dots.append(self.step_on_direction(dots[-1], direction, y0, tubes_starts_b, tubes_directions_b, tubes_zs_b,\
                                                        dists_b, tubes_starts_a, tubes_directions_a, tubes_zs_a, dists_a, sigma))
-                    ##################
-                    values.append(self.R(dots[-1], y0, tubes_starts_b, tubes_directions_b, tubes_zs_b, dists_b, tubes_starts_a,\
-                                      tubes_directions_a, tubes_zs_a, dists_a, sigma))
+
                     last_direction = direction
 
                     counter += 1
@@ -439,15 +445,13 @@ class RetinaTrackReconstruction(object):
                 dots.append(self.step_on_direction(dots[-1], direction, y0, tubes_starts_b,\
                                                    tubes_directions_b, tubes_zs_b, dists_b, tubes_starts_a,\
                                                    tubes_directions_a, tubes_zs_a, dists_a, sigma))
-                ##################
-                values.append(self.R(dots[-1], y0, tubes_starts_b, tubes_directions_b, tubes_zs_b, dists_b, tubes_starts_a,\
-                                  tubes_directions_a, tubes_zs_a, dists_a, sigma))
+
                 last_direction = direction
                 counter = 1
                 
             sigma *= self.sigma_decrement
-        ################        
-        return dots, values
+       
+        return dots[-1]
     
     def candidates_generator(self, ends_b, ends_a, y0):
         """
@@ -457,7 +461,7 @@ class RetinaTrackReconstruction(object):
         """
         
         #constants
-        delta = 15
+        delta = 15 / self.z_scale
         
         xs_b = []
         ys_b = []
@@ -532,13 +536,19 @@ class RetinaTrackReconstruction(object):
         
         return np.array(init_dots)
     
-    def get_y0x0(self, ends_of_strawtubes_b, dists_b, ends_of_strawtubes_a, dists_a):
+    def get_y0x0(self, ends_of_strawtubes_b, ends_of_strawtubes_a):
         
-        projection_b = projection_on_magnet(ends_of_strawtubes_b, dists_b, self.x_resolution, self.y_resolution, self.z_magnet)
-        projection_a = projection_on_magnet(ends_of_strawtubes_a, dists_a, self.x_resolution, self.y_resolution, self.z_magnet)
+        projection_b = projection_on_magnet(ends_of_strawtubes_b, self.x_resolution, self.y_resolution, self.z_magnet)
+        projection_a = projection_on_magnet(ends_of_strawtubes_a, self.x_resolution, self.y_resolution, self.z_magnet)
         
-        y0 = np.argmax((projection_b + projection_a).sum(axis=0))
-        x0 = np.argmax((projection_b + projection_a)[:, y0])
+        projection = projection_b + projection_a
+        temp = projection.sum(axis=0)
+        y_summary_values = temp
+        y_summary_values[:-1] += temp[1:] * 0.3
+        y_summary_values[1:] += temp[:-1] * 0.3
+        
+        y0 = np.argmax(y_summary_values)
+        x0 = np.argmax(projection[:, y0])
         
         y0 = (y0 - projection_b.shape[1] * 0.5) / self.y_resolution
         x0 = (x0 - projection_b.shape[0] * 0.5) / self.x_resolution
@@ -546,6 +556,66 @@ class RetinaTrackReconstruction(object):
             x0 = 0
         
         return y0, x0
+    
+    def labeling(self, best_model, y0, best_model2, y0_2, tubes_starts_b, tubes_directions_b, tubes_zs_b,tubes_starts_a,\
+                 tubes_directions_a, tubes_zs_a):
+        
+        x1, m1, l_b1, l_a1 = best_model
+        x2, m2, l_b2, l_a2 = best_model2
+        
+        labels_b = [-1] * len(tubes_starts_b)
+        
+        for i in range(len(tubes_starts_b)):
+            
+            z1 = z_distance(x1, m1, y0, l_b1, tubes_zs_b[i], tubes_starts_b[i], tubes_directions_b[i], z_magnet=self.z_magnet)
+            z2 = z_distance(x2, m2, y0_2, l_b2, tubes_zs_b[i], tubes_starts_b[i], tubes_directions_b[i], z_magnet=self.z_magnet)
+            
+            if z1 < np.min([z2, self.inlier_treshold]):
+                
+                labels_b[i] = 0
+                
+            elif z2 < np.min([z1, self.inlier_treshold]):
+            
+                labels_b[i] = 1
+                
+        labels_b = np.array(labels_b)
+        
+        labels_a = [-1] * len(tubes_starts_a)
+        
+        for i in range(len(tubes_starts_a)):
+            
+            z1 = z_distance(x1, m1, y0, l_a1, tubes_zs_a[i], tubes_starts_a[i], tubes_directions_a[i], z_magnet=self.z_magnet)
+            z2 = z_distance(x2, m2, y0_2, l_a2, tubes_zs_a[i], tubes_starts_a[i], tubes_directions_a[i], z_magnet=self.z_magnet)
+            
+            if z1 < np.min([z2, self.inlier_treshold]):
+                
+                labels_a[i] = 0
+                
+            elif z2 < np.min([z1, self.inlier_treshold]):
+            
+                labels_a[i] = 1
+                
+        labels_a = np.array(labels_a)
+        
+        return [labels_b, labels_a]
+    
+    def adjust(self, track, y0, starts_b, perpendiculars_b, zs_b, starts_a, perpendiculars_a, zs_a, sigma):
+        
+        x0, m, l_b, l_a = track
+        
+        params = [x0, m, y0, l_b, l_a]
+        
+        args = (starts_b, perpendiculars_b, zs_b, starts_a, perpendiculars_a, zs_a, sigma, self.z_magnet)
+        
+        ang_del = 0.005 * self.z_scale
+        
+        bounds = [(x0-5., x0+5.), (m-ang_del, m+ang_del), (y0-2., y0+2.), (l_b-ang_del, l_b+ang_del), (l_a-ang_del, l_a+ang_del)]
+        
+        params = differential_evolution(adjR, args=args, bounds=bounds)
+        
+        p = params.x
+        
+        return [p[0], p[1], p[3], p[4]], p[2]
          
     def fit(self, event):
         
@@ -555,6 +625,11 @@ class RetinaTrackReconstruction(object):
         ends_of_strawtubes_a = event[event.StatNb > 2][['Wx1', 'Wy1', 'Wz', 'Wx2', 'Wy2', 'Wz']].values
         #dists_a = event[event.StatNb > 2]['dist2Wire'].values
         dists_a = np.zeros(len(ends_of_strawtubes_a))
+        
+        scaler = Scaler(z_scale=self.z_scale, y_scale=self.y_scale, x_scale=self.x_scale)
+        self.z_magnet = self.z_magnet / self.z_scale
+
+        ends_of_strawtubes_b = scaler.transform(ends_of_strawtubes_b)
         
         starts = []
         directions = []
@@ -571,6 +646,8 @@ class RetinaTrackReconstruction(object):
         tubes_directions_b = np.array(directions)
         tubes_zs_b = np.array(z0s)
         
+        ends_of_strawtubes_a = scaler.transform(ends_of_strawtubes_a)
+        
         starts = []
         directions = []
         z0s = []
@@ -586,34 +663,52 @@ class RetinaTrackReconstruction(object):
         tubes_directions_a = np.array(directions)
         tubes_zs_a = np.array(z0s)
         
-        y0, x0 = self.get_y0x0(ends_of_strawtubes_b, dists_b, ends_of_strawtubes_a, dists_a)
+        y0, x0 = self.get_y0x0(ends_of_strawtubes_b, ends_of_strawtubes_a)
         
         candidates = self.candidates_generator(ends_of_strawtubes_b, ends_of_strawtubes_a, y0)
         
-        best_model = np.array([0, 0, 0, 0])
-        min_R = 0
+        best_model = np.array([x0, 0, 0, 0])
+
+        if len(candidates > 0):
+
+            min_R = 0
+
+            for candidate in candidates:
+
+                R = self.R(candidate, y0, tubes_starts_b, tubes_directions_b, tubes_zs_b, dists_b, tubes_starts_a,\
+                           tubes_directions_a, tubes_zs_a, dists_a, self.pre_sigma)
+
+                if R < min_R:
+                    min_R = R
+                    best_model = candidate
+
+            #best_model = self.conjugate_gradient_method(best_model, y0, tubes_starts_b, tubes_directions_b, tubes_zs_b, dists_b,\
+            #                                            tubes_starts_a, tubes_directions_a, tubes_zs_a, dists_a,\
+            #                                            sigma_from=self.sigma_to)
+
+        else:
         
-        for candidate in candidates:
+            best_model = self.conjugate_gradient_method(best_model, y0, tubes_starts_b, tubes_directions_b, tubes_zs_b, dists_b,\
+                                                        tubes_starts_a, tubes_directions_a, tubes_zs_a, dists_a,\
+                                                        sigma_from=self.sigma_from)
         
-            R = self.R(candidate, y0, tubes_starts_b, tubes_directions_b, tubes_zs_b, dists_b, tubes_starts_a, tubes_directions_a,\
-                       tubes_zs_a, dists_a, self.pre_sigma)
-            
-            if R < min_R:
-                min_R = R
-                best_model = candidate
-                
+        if self.adjusting:
+            tubes_perpendiculars_b = np.hstack([-tubes_directions_b[:, 1].reshape(-1, 1), tubes_directions_b[:, 0].reshape(-1, 1)])
+            tubes_perpendiculars_a = np.hstack([-tubes_directions_a[:, 1].reshape(-1, 1), tubes_directions_a[:, 0].reshape(-1, 1)])
+            best_model, y0 = self.adjust(best_model, y0, tubes_starts_b, tubes_perpendiculars_b, tubes_zs_b, tubes_starts_a,\
+                                         tubes_perpendiculars_a, tubes_zs_a, sigma=self.sigma_to)
+
         x0, m, l_b, l_a = best_model
-        
         mask_b = []
-                
+
         for i in range(len(tubes_starts_b)):
-            
+
             if z_distance(x0, m, y0, l_b, tubes_zs_b[i], tubes_starts_b[i], tubes_directions_b[i], z_magnet=self.z_magnet) < self.inlier_treshold:
-                
+
                 mask_b.append(0)
                 
             else:
-                
+
                 mask_b.append(1)
                 
         mask_b = np.array(mask_b, dtype=bool)
@@ -632,107 +727,54 @@ class RetinaTrackReconstruction(object):
                 
         mask_a = np.array(mask_a, dtype=bool)
         
-        y0_2, x0_2 = self.get_y0x0(ends_of_strawtubes_b[mask_b], dists_b[mask_b], ends_of_strawtubes_a[mask_a], dists_a[mask_a])
+        y0_2, x0_2 = self.get_y0x0(ends_of_strawtubes_b[mask_b], ends_of_strawtubes_a[mask_a])
         
-        best_model2 = np.array([0, 0, 0, 0])
-        min_R = 0
+        best_model2 = np.array([x0_2, 0, 0, 0])
         
         candidates = self.candidates_generator(ends_of_strawtubes_b[mask_b], ends_of_strawtubes_a[mask_a], y0_2)
         
-        for candidate in candidates:
+        if len(candidates > 0):
+               
+            min_R = 0
         
-            R = self.R(candidate, y0_2, tubes_starts_b[mask_b], tubes_directions_b[mask_b], tubes_zs_b[mask_b], dists_b[mask_b],\
-                       tubes_starts_a[mask_a], tubes_directions_a[mask_a], tubes_zs_a[mask_a], dists_a[mask_a], self.pre_sigma)
+            for candidate in candidates:
+
+                R = self.R(candidate, y0_2, tubes_starts_b[mask_b], tubes_directions_b[mask_b], tubes_zs_b[mask_b], dists_b[mask_b],\
+                           tubes_starts_a[mask_a], tubes_directions_a[mask_a], tubes_zs_a[mask_a], dists_a[mask_a], self.pre_sigma)
+
+                if R < min_R:
+                    min_R = R
+                    best_model2 = candidate
+                    
+            #best_model2 = self.conjugate_gradient_method(best_model2, y0_2, tubes_starts_b[mask_b], tubes_directions_b[mask_b],\
+            #                                             tubes_zs_b[mask_b], dists_b[mask_b], tubes_starts_a[mask_a],\
+            #                                             tubes_directions_a[mask_a], tubes_zs_a[mask_a], dists_a[mask_a],\
+            #                                             sigma_from=self.sigma_to)
+        
+        else:
             
-            if R < min_R:
-                min_R = R
-                best_model2 = candidate
-                
-        x02, m, l_b, l_a = best_model2
-        
-        mask_b2 = []
-                
-        for i in range(len(tubes_starts_b)):
+            best_model2 = self.conjugate_gradient_method(best_model2, y0_2, tubes_starts_b[mask_b], tubes_directions_b[mask_b],\
+                                                         tubes_zs_b[mask_b], dists_b[mask_b], tubes_starts_a[mask_a],\
+                                                         tubes_directions_a[mask_a], tubes_zs_a[mask_a], dists_a[mask_a],\
+                                                         sigma_from=self.sigma_from)
             
-            if z_distance(x02, m, y0_2, l_b, tubes_zs_b[i], tubes_starts_b[i], tubes_directions_b[i], z_magnet=self.z_magnet) < self.inlier_treshold:
+        if self.adjusting:
+            tubes_perpendiculars_b = np.hstack([-tubes_directions_b[:, 1].reshape(-1, 1), tubes_directions_b[:, 0].reshape(-1, 1)])
+            tubes_perpendiculars_a = np.hstack([-tubes_directions_a[:, 1].reshape(-1, 1), tubes_directions_a[:, 0].reshape(-1, 1)])
+            best_model2, y0_2 = self.adjust(best_model2, y0_2, tubes_starts_b[mask_b], tubes_perpendiculars_b[mask_b],\
+                                         tubes_zs_b[mask_b], tubes_starts_a[mask_a], tubes_perpendiculars_a[mask_a],\
+                                         tubes_zs_a[mask_a], sigma=self.sigma_to)
                 
-                mask_b2.append(0)
-                
-            else:
-                
-                mask_b2.append(1)
-                
-        mask_b2 = np.array(mask_b2, dtype=bool)
+        self.labels_ = self.labeling(best_model, y0, best_model2, y0_2, tubes_starts_b, tubes_directions_b, tubes_zs_b,\
+                                     tubes_starts_a, tubes_directions_a, tubes_zs_a)
         
-        mask_a2 = []
-                
-        for i in range(len(tubes_starts_a)):
-            
-            if z_distance(x02, m, y0_2, l_a, tubes_zs_a[i], tubes_starts_a[i], tubes_directions_a[i], z_magnet=self.z_magnet) < self.inlier_treshold:
-                
-                mask_a2.append(0)
-                
-            else:
-                
-                mask_a2.append(1)
-                
-        mask_a2 = np.array(mask_a2, dtype=bool)
-                
-        labels_b = (-mask_b + 0) * 2 + (-mask_b2 + 0) - 1
-        labels_a = (-mask_a + 0) * 2 + (-mask_a2 + 0) - 1
-        labels_a[labels_a==2] -= 1
-        labels_b[labels_b==2] -= 1
-        self.labels_ = [labels_b, labels_a]
+        m1 = scaler.parameters_inverse_transform(best_model)
+        m2 = scaler.parameters_inverse_transform(best_model2)
+        self.z_magnet = self.z_magnet * self.z_scale
         
-        m1 = best_model
-        m2 = best_model2
         self.tracks_params_ = np.array([[[[m1[2], y0 - self.z_magnet * m1[2]], [m1[1], m1[0] - self.z_magnet * m1[1]]],\
                                         [[m2[2], y0_2 - self.z_magnet * m2[2]], [m2[1], m2[0] - self.z_magnet * m2[1]]]],\
                                         [[[m1[3], y0 - self.z_magnet * m1[3]], [m1[1], m1[0] - self.z_magnet * m1[1]]],\
                                          [[m2[3], y0_2 - self.z_magnet * m2[3]], [m2[1], m2[0] - self.z_magnet * m2[1]]]]])
-        '''
-        scaler = Scaler(z_scale=self.z_scale, y_scale=self.y_scale, x_scale=self.x_scale)
-        self.z_magnet = self.z_magnet / self.z_scale
         
-        normed_ends = scaler.transform(ends_of_strawtubes_b)
-        
-        starts = []
-        directions = []
-        z0s = []
-        
-        for i in range(len(normed_ends)):
-            
-            start, direction, z0 = ends2params(normed_ends[i])
-            starts.append(start)
-            directions.append(direction)
-            z0s.append(z0)
-        
-        tubes_starts_b = np.array(starts)
-        tubes_directions_b = np.array(directions)
-        tubes_zs_b = np.array(z0s)
-        
-        normed_ends = scaler.transform(ends_of_strawtubes_a)
-        
-        starts = []
-        directions = []
-        z0s = []
-        
-        for i in range(len(normed_ends)):
-            
-            start, direction, z0 = ends2params(normed_ends[i])
-            starts.append(start)
-            directions.append(direction)
-            z0s.append(z0)
-        
-        tubes_starts_a = np.array(starts)
-        tubes_directions_a = np.array(directions)
-        tubes_zs_a = np.array(z0s)
-        
-        start = scaler.parameters_transform(np.array([x0, 0, 0, 0]))
-        dots, values = self.conjugate_gradient_method(start, y0, tubes_starts_b, tubes_directions_b,\
-                                                                                  tubes_zs_b, dists_b, tubes_starts_a,\
-                                                                                  tubes_directions_a, tubes_zs_a, dists_a)
-        return scaler.parameters_inverse_transform(dots), values, y0
-        '''
-        
-        #return [[best_model], [best_model2]], [y0, y0_2]
+        return [[m1], [m2]], [y0, y0_2]
