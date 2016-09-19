@@ -599,7 +599,9 @@ class RetinaTrackReconstruction(object):
         
         return [labels_b, labels_a]
     
-    def adjust(self, track, y0, starts_b, perpendiculars_b, zs_b, starts_a, perpendiculars_a, zs_a, sigma):
+    def adjust(self, track, y0, starts_b, perpendiculars_b, zs_b, starts_a, perpendiculars_a, zs_a, sigma, dels=[5., 2., 0.005]):
+        
+        x_del, y_del, ang_del = dels
         
         x0, m, l_b, l_a = track
         
@@ -607,11 +609,12 @@ class RetinaTrackReconstruction(object):
         
         args = (starts_b, perpendiculars_b, zs_b, starts_a, perpendiculars_a, zs_a, sigma, self.z_magnet)
         
-        ang_del = 0.005 * self.z_scale
+        ang_del = ang_del * self.z_scale
         
-        bounds = [(x0-5., x0+5.), (m-ang_del, m+ang_del), (y0-2., y0+2.), (l_b-ang_del, l_b+ang_del), (l_a-ang_del, l_a+ang_del)]
+        bounds = [(x0-x_del, x0+x_del), (m-ang_del, m+ang_del), (y0-y_del, y0+y_del), (l_b-ang_del, l_b+ang_del),\
+                  (l_a-ang_del, l_a+ang_del)]
         
-        params = differential_evolution(adjR, args=args, bounds=bounds)
+        params = differential_evolution(adjR, args=args, bounds=bounds, maxiter=2000, popsize=20)
         
         p = params.x
         
@@ -665,9 +668,9 @@ class RetinaTrackReconstruction(object):
         
         y0, x0 = self.get_y0x0(ends_of_strawtubes_b, ends_of_strawtubes_a)
         
+        best_model = np.array([0, 0, 0, 0])
+        """
         candidates = self.candidates_generator(ends_of_strawtubes_b, ends_of_strawtubes_a, y0)
-        
-        best_model = np.array([x0, 0, 0, 0])
 
         if len(candidates > 0):
 
@@ -691,12 +694,17 @@ class RetinaTrackReconstruction(object):
             best_model = self.conjugate_gradient_method(best_model, y0, tubes_starts_b, tubes_directions_b, tubes_zs_b, dists_b,\
                                                         tubes_starts_a, tubes_directions_a, tubes_zs_a, dists_a,\
                                                         sigma_from=self.sigma_from)
+        """
+        tubes_perpendiculars_b = np.hstack([-tubes_directions_b[:, 1].reshape(-1, 1), tubes_directions_b[:, 0].reshape(-1, 1)])
+        tubes_perpendiculars_a = np.hstack([-tubes_directions_a[:, 1].reshape(-1, 1), tubes_directions_a[:, 0].reshape(-1, 1)])
+        best_model, y0 = self.adjust(best_model, y0, tubes_starts_b, tubes_perpendiculars_b, tubes_zs_b, tubes_starts_a,\
+                                     tubes_perpendiculars_a, tubes_zs_a, sigma=self.pre_sigma, dels=[250., 2., 0.35])
         
         if self.adjusting:
             tubes_perpendiculars_b = np.hstack([-tubes_directions_b[:, 1].reshape(-1, 1), tubes_directions_b[:, 0].reshape(-1, 1)])
             tubes_perpendiculars_a = np.hstack([-tubes_directions_a[:, 1].reshape(-1, 1), tubes_directions_a[:, 0].reshape(-1, 1)])
             best_model, y0 = self.adjust(best_model, y0, tubes_starts_b, tubes_perpendiculars_b, tubes_zs_b, tubes_starts_a,\
-                                         tubes_perpendiculars_a, tubes_zs_a, sigma=self.sigma_to)
+                                         tubes_perpendiculars_a, tubes_zs_a, sigma=self.sigma_to, dels=[5., 2., 0.005])
 
         x0, m, l_b, l_a = best_model
         mask_b = []
@@ -729,8 +737,8 @@ class RetinaTrackReconstruction(object):
         
         y0_2, x0_2 = self.get_y0x0(ends_of_strawtubes_b[mask_b], ends_of_strawtubes_a[mask_a])
         
-        best_model2 = np.array([x0_2, 0, 0, 0])
-        
+        best_model2 = np.array([0, 0, 0, 0])
+        """
         candidates = self.candidates_generator(ends_of_strawtubes_b[mask_b], ends_of_strawtubes_a[mask_a], y0_2)
         
         if len(candidates > 0):
@@ -757,13 +765,19 @@ class RetinaTrackReconstruction(object):
                                                          tubes_zs_b[mask_b], dists_b[mask_b], tubes_starts_a[mask_a],\
                                                          tubes_directions_a[mask_a], tubes_zs_a[mask_a], dists_a[mask_a],\
                                                          sigma_from=self.sigma_from)
+        """
+        tubes_perpendiculars_b = np.hstack([-tubes_directions_b[:, 1].reshape(-1, 1), tubes_directions_b[:, 0].reshape(-1, 1)])
+        tubes_perpendiculars_a = np.hstack([-tubes_directions_a[:, 1].reshape(-1, 1), tubes_directions_a[:, 0].reshape(-1, 1)])
+        best_model2, y0_2 = self.adjust(best_model2, y0_2, tubes_starts_b[mask_b], tubes_perpendiculars_b[mask_b],\
+                                        tubes_zs_b[mask_b], tubes_starts_a[mask_a], tubes_perpendiculars_a[mask_a],\
+                                        tubes_zs_a[mask_a], sigma=self.pre_sigma, dels=[250., 2., 0.35])
             
         if self.adjusting:
             tubes_perpendiculars_b = np.hstack([-tubes_directions_b[:, 1].reshape(-1, 1), tubes_directions_b[:, 0].reshape(-1, 1)])
             tubes_perpendiculars_a = np.hstack([-tubes_directions_a[:, 1].reshape(-1, 1), tubes_directions_a[:, 0].reshape(-1, 1)])
             best_model2, y0_2 = self.adjust(best_model2, y0_2, tubes_starts_b[mask_b], tubes_perpendiculars_b[mask_b],\
                                          tubes_zs_b[mask_b], tubes_starts_a[mask_a], tubes_perpendiculars_a[mask_a],\
-                                         tubes_zs_a[mask_a], sigma=self.sigma_to)
+                                         tubes_zs_a[mask_a], sigma=self.sigma_to, dels=[5., 2., 0.005])
                 
         self.labels_ = self.labeling(best_model, y0, best_model2, y0_2, tubes_starts_b, tubes_directions_b, tubes_zs_b,\
                                      tubes_starts_a, tubes_directions_a, tubes_zs_a)
